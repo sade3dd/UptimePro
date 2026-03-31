@@ -4,7 +4,7 @@
  */
 {
 	"$schema": "node_modules/wrangler/config-schema.json",
-	"name": "winter-art-1d44",
+	"name": "uptimepro",
 	"main": "src/index.ts",
 	"compatibility_date": "2026-03-29",
 	"migrations": [
