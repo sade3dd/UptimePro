@@ -67,7 +67,7 @@ npm run deploy
 5.  Value 填入您刚才在 Cloudflare 创建的 API 令牌。
 
 ### 3. 触发部署
-现在，每当您向 `main` 分支提交代码（`git push`），GitHub 就会自动运行部署流程。您可以在仓库的 **Actions** 标签页查看进度。
+actions 需要手动触发，可以向 AI 请教
 
 ---
 
