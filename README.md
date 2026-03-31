@@ -23,7 +23,7 @@
 
 ### 1. 环境准备
 - 确保您的电脑已安装 **Node.js** (建议 v18+) 和 **npm**。
-- 拥有一个 **Cloudflare** 账号（Durable Objects 需要开通 Workers 订阅计划，每月约 $5）。
+- 拥有一个 **Cloudflare** 账号（Durable Objects ）。
 
 ### 2. 下载并安装
 1.  下载本项目代码到本地。
