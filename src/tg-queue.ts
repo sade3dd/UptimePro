@@ -62,12 +62,14 @@ export class MonitorEngine extends DurableObject {
     if (url.pathname === "/api/monitors" && request.method === "POST") {
       const body = await request.json() as any;
       this.state.storage.sql.exec(
-        "INSERT INTO monitors (name, url, method, headers, body, interval, notify, next_check) VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)",
+        "INSERT INTO monitors (name, url, method, headers, body, interval, notify, next_check, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
         body.name, body.url, body.method || 'GET',
         body.headers ? JSON.stringify(body.headers) : null,
         body.body || null,
         body.interval || 60,
-        body.notify === false ? 0 : 1
+        body.notify === false ? 0 : 1,
+        new Date().toISOString(),
+        new Date().toISOString()
       );
       await this.state.storage.setAlarm(Date.now());
       return Response.json({ success: true }, { headers: corsHeaders });
@@ -137,9 +139,9 @@ export class MonitorEngine extends DurableObject {
     const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
     this.state.storage.sql.exec("DELETE FROM logs WHERE timestamp < ?", sevenDaysAgo);
 
-    // 1. 仅选择到期的任务，且每次限制 10 个并发，防止超时
+    // 1. 仅选择到期的任务，且每次限制 5 个并发，防止超时
     const cursor = this.state.storage.sql.exec(
-      "SELECT * FROM monitors WHERE next_check <= ? LIMIT 10",
+      "SELECT * FROM monitors WHERE next_check <= ? LIMIT 5",
       now
     );
     const dueMonitors = cursor.toArray();
@@ -184,20 +186,35 @@ export class MonitorEngine extends DurableObject {
   }
 
   async checkSite(monitor: any) {
-    const start = Date.now();
     let success = false;
+    
+    const start = Date.now();
     let statusCode = 0;
     let errorMessage = "";
 
     try {
-      const headers = monitor.headers ? JSON.parse(monitor.headers) : {};
+      console.log(`[Monitor] 开始检查 ${monitor.url}`);
+      
+      // 解析 Headers
+      let headers = {};
+      if (monitor.headers) {
+        try {
+          const parsed = JSON.parse(monitor.headers);
+          if (parsed && typeof parsed === 'object') {
+            headers = parsed;
+          }
+        } catch (e) {
+          console.error("[Monitor] Headers parse error:", e);
+        }
+      }
+
       const fetchOptions: any = {
         method: monitor.method || 'GET',
         headers: {
-          "User-Agent": "MonitorEngine/3.0",
+          "Referer": "https://" + new URL(monitor.url).origin,
           ...headers
         },
-        signal: AbortSignal.timeout(15000), 
+        signal: AbortSignal.timeout(15000),
       };
 
       if (monitor.body && ['POST', 'PUT', 'PATCH'].includes(monitor.method)) {
@@ -206,34 +223,43 @@ export class MonitorEngine extends DurableObject {
 
       const res = await fetch(monitor.url, fetchOptions);
       statusCode = res.status;
+      const latency = Date.now() - start;
       success = res.ok;
-      if (!success) errorMessage = `HTTP ${res.status}`;
+      
+      if (!success) {
+        errorMessage = `HTTP ${statusCode}`;
+        console.log(`[Monitor] ${monitor.url} - ${statusCode} (${latency}ms) - FAIL`);
+      } else {
+        console.log(`[Monitor] ${monitor.url} - ${statusCode} (${latency}ms) - OK`);
+      }
     } catch (e: any) {
       success = false;
       errorMessage = e.message || "Timeout/Network Error";
+      console.error(`[Monitor] ${monitor.url} - ERROR: ${errorMessage}`);
     }
 
     const latency = Date.now() - start;
     const newStatus = success ? "up" : "down";
 
-    // 状态变更检测并发送通知 (仅当 notify 开启时)
-    if (monitor.status !== "unknown" && monitor.status !== newStatus && monitor.notify === 1) {
-      await this.sendNotification(monitor, newStatus, statusCode, errorMessage);
-    }
-
-    // 计算下次检查时间 (当前时间 + 间隔秒数)
+    // 更新状态和下次检查时间 (先更新数据库，防止通知报错导致状态未保存)
     const nextCheck = new Date(Date.now() + monitor.interval * 1000).toISOString();
-
-    // 更新状态和下次检查时间
     this.state.storage.sql.exec(
-      "UPDATE monitors SET status = ?, last_check = CURRENT_TIMESTAMP, next_check = ? WHERE id = ?",
-      newStatus, nextCheck, monitor.id
+      "UPDATE monitors SET status = ?, last_check = ?, next_check = ? WHERE id = ?",
+      newStatus, new Date().toISOString(), nextCheck, monitor.id
     );
 
     this.state.storage.sql.exec(
       "INSERT INTO logs (monitor_id, status_code, latency, success) VALUES (?, ?, ?, ?)",
       monitor.id, statusCode, latency, success ? 1 : 0
     );
+
+    // 状态变更检测并发送通知 (仅当 notify 开启时)
+    if (monitor.status !== "unknown" && monitor.status !== newStatus && monitor.notify === 1) {
+      // 异步发送，不阻塞主流程
+      this.sendNotification(monitor, newStatus, statusCode, errorMessage).catch(e => {
+        console.error("[MonitorEngine] 通知发送失败:", e);
+      });
+    }
   }
 
   async sendNotification(monitor: any, status: string, code: number, error: string) {
@@ -244,7 +270,14 @@ export class MonitorEngine extends DurableObject {
 
     const icon = status === "up" ? "✅" : "❌";
     const statusText = status === "up" ? "恢复正常 (UP)" : "检测到故障 (DOWN)";
-    const time = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+    
+    // 安全的时间格式化
+    let time = "";
+    try {
+      time = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+    } catch (e) {
+      time = new Date().toISOString().replace('T', ' ').split('.')[0] + ' UTC';
+    }
     
     const message = `${icon} *监控状态变更通知*\n\n` +
                     `*名称*: ${monitor.name}\n` +
@@ -281,4 +314,3 @@ export class MonitorEngine extends DurableObject {
     await this.state.storage.delete(key);
   }
 }
-
