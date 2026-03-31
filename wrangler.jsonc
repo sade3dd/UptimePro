@@ -34,6 +34,10 @@
 		"TG_BOT_TOKEN": "",	
 		"TG_CHAT_ID": ""
 	},
+    "triggers": {
+        "crons": ["*/5 * * * *"]
+    }
+
 	/**
 	 * Smart Placement
 	 * Docs: https://developers.cloudflare.com/workers/configuration/smart-placement/#smart-placement
