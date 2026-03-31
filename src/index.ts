@@ -606,7 +606,18 @@ export default {
 
             formatTime(iso) {
                 if(!iso) return '---';
-                return new Date(iso).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+                // SQLite CURRENT_TIMESTAMP returns "YYYY-MM-DD HH:MM:SS" in UTC.
+                // We ensure it's treated as UTC by converting to ISO format with 'Z'.
+                let dateStr = iso;
+                if (typeof iso === 'string' && !iso.includes('T') && !iso.includes('Z')) {
+                    dateStr = iso.replace(' ', 'T') + 'Z';
+                }
+                return new Date(dateStr).toLocaleTimeString([], { 
+                    hour: '2-digit', 
+                    minute: '2-digit', 
+                    second: '2-digit',
+                    hour12: false 
+                });
             },
 
             init() {
