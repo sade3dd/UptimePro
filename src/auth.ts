@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { sign, verify } from 'hono/jwt';
 import type { Context, Next } from 'hono';
 import { getCookie, setCookie } from 'hono/cookie';
-
+import { cacheResponse } from './utils';
 // 定义无需认证的路由
 export const UNAUTH_ROUTES = {
   CAPTCHA: '/captcha',
@@ -127,7 +127,7 @@ export async function isAuthenticated(request: Request, env: any): Promise<boole
   }
 }
 
-export function getLoginHtml(captchaSalt: string): string {
+export function getLoginHtml(): string {
   return `
 <!DOCTYPE html>
 <html lang="zh-CN" data-bs-theme="dark">
@@ -430,8 +430,7 @@ export function getLoginHtml(captchaSalt: string): string {
   `;
 }
 auth.get('/login', (c: Context) => {
-  const captchaSalt = c.env.CAPTCHA_SALT || '';
-  return c.html(getLoginHtml(captchaSalt));
+  return cacheResponse(c, c.req.url, async () => c.html(getLoginHtml()), 300);
 });
 auth.get('/captcha', captchaLimiter, async (c: Context) => {
   await ensureStore(c.env);
