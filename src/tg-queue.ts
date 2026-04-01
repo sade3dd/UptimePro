@@ -233,6 +233,15 @@ export class MonitorEngine extends DurableObject {
       function applySafeDefaults(headers: Record<string, string>, url: string) {
         const safe = { ...headers };
 
+        // 0. 自动补全 Host
+        if (!safe["Host"]) {
+          try {
+            safe["Host"] = new URL(url).host;
+          } catch (e) {
+            // URL 解析失败
+          }
+        }
+
         // 1. 基础浏览器标识
         if (!safe["User-Agent"]) safe["User-Agent"] = randomUA();
         if (!safe["Accept"]) {
@@ -290,7 +299,7 @@ export class MonitorEngine extends DurableObject {
       const fetchOptions: any = {
         method: monitor.method || "GET",
         headers,
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(25000),
       };
 
       // ============================
