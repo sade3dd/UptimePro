@@ -2,13 +2,9 @@ import { Hono } from 'hono';
 import { sign, verify } from 'hono/jwt';
 import type { Context, Next } from 'hono';
 import { getCookie, setCookie } from 'hono/cookie';
-import { cacheResponse } from './utils';
 
 // 定义无需认证的路由
 export const UNAUTH_ROUTES = {
-  HONOSQL: '/Honosql',
-  UAA11: '/uaa11',
-  UPLOAD: '/adSGFH4FSWuYikm/CGHb2CiDFQ5m/dbQ9XY1LgKwWqoot/upload/',
   CAPTCHA: '/captcha',
   LOGIN: '/login',
   LOGOUT: '/scdfdsferty456ghfhSASkkxjdsiufs8d880d9d9fjjJUUS8-8JJ_SXJK_cs/',
@@ -109,14 +105,23 @@ function generateCaptcha(): string {
   return captcha;
 }
 
-export async function isAuthenticated(request: Request, jwtSecret: string): Promise<boolean> {
+export async function isAuthenticated(request: Request, env: any): Promise<boolean> {
   const cookie = request.headers.get("Cookie") || "";
   const token = cookie.split(";").find(c => c.trim().startsWith("token="))?.split("=")[1];
   
   if (!token) return false;
+  
+  const jwtSecret = env.JWT_SECRET || 'k1PtweQ69UBRzdOIla2n6AJf9ovp3TvFBhvbeUIOxSmCEPOvQwfRGBuzeaHwKfjNIJb7JtaEruvYkjPUp5eZpZ';
+  
   try {
     await verify(token, jwtSecret, 'HS256');
-    return true;
+    
+    const storage = new KVStorage(env);
+    const ip = request.headers.get("CF-Connecting-IP") || "";
+    const hashedIP = await hashWithSubtle(ip);
+    const session = await storage.get("auth_session");
+    
+    return session && session.token === token && session.hashedIP === hashedIP;
   } catch (e) {
     return false;
   }
@@ -370,15 +375,28 @@ export function getLoginHtml(captchaSalt: string): string {
     document.getElementById('loginForm').onsubmit = async (e) => {
       e.preventDefault();
       const errorAlert = document.getElementById('errorAlert');
+      const loginBtn = document.getElementById('loginBtn');
       errorAlert.classList.add('d-none');
       
       const username = document.getElementById('username').value.trim();
       const password = document.getElementById('password').value;
       const captcha = document.getElementById('captcha').value.trim().toLowerCase();
       
+      if (!captchaId) {
+        errorAlert.textContent = t('captchaError');
+        errorAlert.classList.remove('d-none');
+        return;
+      }
+
+      loginBtn.disabled = true;
+      loginBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>' + t('loginBtn');
+
       try {
-        const hashedPassword = sha256(password);
+        const passwordHash = sha256(password);
         const hashedCaptcha = sha256(captcha);
+        // 使用 hashedCaptcha 作为盐值再次加密
+        const hashedPassword = sha256(passwordHash + hashedCaptcha);
+
         const res = await fetch('/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
@@ -396,11 +414,14 @@ export function getLoginHtml(captchaSalt: string): string {
           refreshCaptcha();
           errorAlert.textContent = data.error || t('loginFailed');
           errorAlert.classList.remove('d-none');
-          
+          loginBtn.disabled = false;
+          loginBtn.textContent = t('loginBtn');
         }
       } catch (err) {
         errorAlert.textContent = t('networkError');
         errorAlert.classList.remove('d-none');
+        loginBtn.disabled = false;
+        loginBtn.textContent = t('loginBtn');
       }
     };
   </script>
@@ -409,7 +430,8 @@ export function getLoginHtml(captchaSalt: string): string {
   `;
 }
 auth.get('/login', (c: Context) => {
- return cacheResponse(c, c.req.url, async () => c.html(getLoginHtml('')), 300);
+  const captchaSalt = c.env.CAPTCHA_SALT || '';
+  return c.html(getLoginHtml(captchaSalt));
 });
 auth.get('/captcha', captchaLimiter, async (c: Context) => {
   await ensureStore(c.env);
@@ -418,10 +440,15 @@ auth.get('/captcha', captchaLimiter, async (c: Context) => {
 
   const captchaText = generateCaptcha();
   const captchaId = 'latest';
-  const hashedCaptcha = await hashWithSubtle(captchaText.toLowerCase() + captchaSalt);
+  const saltedHashedCaptcha = await hashWithSubtle((captchaText + captchaSalt).toLowerCase());
+
+  // 获取当前存储的密码哈希，并结合 saltedHashedCaptcha 生成预期的登录哈希
+  const storedPasswordHash = await storage.get('admin:passwordHash');
+  const expectedLoginHash = await hashWithSubtle(storedPasswordHash + saltedHashedCaptcha);
 
   await storage.put('captcha:latest', {
-    hashedCaptcha,
+    hashedCaptcha: saltedHashedCaptcha,
+    expectedLoginHash,
     text: captchaText,
     expires: Date.now() + 5 * 60 * 1000,
   });
@@ -443,7 +470,7 @@ auth.post('/login', globalLimiter, async (c: Context) => {
       return c.json({ error: '用户名、密码和验证码不能为空' }, 429);
     }
 
-    const storedCaptcha = (await storage.get('captcha:latest')) as CaptchaData | undefined;
+    const storedCaptcha = (await storage.get('captcha:latest')) as any;
 
     if (!storedCaptcha || storedCaptcha.expires <= Date.now()) {
       await storage.delete('captcha:latest');
@@ -455,19 +482,25 @@ auth.post('/login', globalLimiter, async (c: Context) => {
       return c.json({ error: '验证码错误' }, 429);
     }
 
-    // 直接从持久化存储验证用户
     const storedUsername = await storage.get('admin:username');
-    const storedPasswordHash = await storage.get('admin:passwordHash');
-
-    if (username !== storedUsername || hashedPassword !== storedPasswordHash) {
+    
+    // 验证用户名和结合了验证码盐值的密码哈希
+    if (username !== storedUsername || hashedPassword !== storedCaptcha.expectedLoginHash) {
       return c.json({ error: '无效的用户名或密码' }, 429);
     }
 
     const payload = {
-      sub: username,
+      sub: 'admin',
       exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60,
     };
     const token = await sign(payload, jwtSecret);
+
+    // 获取并加密用户 IP
+    const ip = c.req.header('CF-Connecting-IP') || '';
+    const hashedIP = await hashWithSubtle(ip);
+    
+    // 将 token 和加密后的 IP 存入 KV，实现单一登录
+    await storage.put('auth_session', { token, hashedIP });
 
     setCookie(c, 'token', token, {
       path: '/',
@@ -482,7 +515,16 @@ auth.post('/login', globalLimiter, async (c: Context) => {
   }
 });
 
-auth.get(UNAUTH_ROUTES.LOGOUT, (c: Context) => {
+auth.get(UNAUTH_ROUTES.LOGOUT, async (c: Context) => {
+  const cookie = c.req.header("Cookie") || "";
+  const token = cookie.split(";").find(c => c.trim().startsWith("token="))?.split("=")[1];
+  if (token) {
+    const storage = new KVStorage(c.env);
+    const session = await storage.get('auth_session');
+    if (session && session.token === token) {
+      await storage.delete('auth_session');
+    }
+  }
   setCookie(c, 'token', '', {
     path: '/',
     maxAge: 0,
