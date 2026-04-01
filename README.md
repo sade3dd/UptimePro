@@ -1,11 +1,10 @@
 # Uptime Pro 🚀
 
 一个轻量级、自托管的站点监控工具。基于 **Cloudflare Workers**、**Durable Objects** 和 **SQLite** 构建。
-# 有时候 1003 错误，
 
 ## ✨ 功能特性
 
-- **实时监控**：支持 HTTP(S) 监控，可自定义请求方法、请求头及请求体。
+- **实时监控**：支持 HTTP(S) TCP 监控，可自定义请求方法、请求头及请求体。
 - **SQLite 存储**：利用 Cloudflare Durable Objects 的 SQL API 高效存储监控配置与日志。
 - **Telegram 告警**：当站点宕机或恢复时，通过 Telegram 机器人即时推送通知。
 - **安全控制面板**：集成 JWT 认证与自定义图形验证码系统。
@@ -15,6 +14,7 @@
 
 ---
 ---
+![登录监控](./png/6.jpeg)
 ![监控面板](./png/4.png)
 ![添加监控](./png/3.png)
 ![编辑监控](./png/1.png)
