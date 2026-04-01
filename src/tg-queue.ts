@@ -198,34 +198,41 @@ export class MonitorEngine extends DurableObject {
       console.log(`[Monitor] 开始检查 ${monitor.url}`);
 
       // ============================
+      // 0. 检查是否为 IP 地址 (Workers 不支持直接 IP 监控)
+      // ============================
+      try {
+        const urlObj = new URL(monitor.url);
+        const hostname = urlObj.hostname;
+        // 简单的 IP 正则 (IPv4)
+        if (/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(hostname) || hostname.includes(':')) {
+          throw new Error("Direct IP monitoring is not supported by Cloudflare Workers. Please use a domain name.");
+        }
+      } catch (e: any) {
+        if (e.message.includes("Direct IP")) throw e;
+      }
+
+      // ============================
       // 1. 安全过滤 Header
       // ============================
       function sanitizeHeaders(input: any) {
         const out: Record<string, string> = {};
-        for (const [k, v] of Object.entries(input || {})) {
-          if (/^[A-Za-z0-9-]+$/.test(k)) {
-            out[k] = String(v);
-          } else {
-            console.warn(`[Monitor] Illegal header removed: ${k}`);
+        for (const [rawKey, v] of Object.entries(input || {})) {
+          const k = String(rawKey).toLowerCase();
+
+          // 过滤 HTTP/2 伪头
+          if (k.startsWith(":")) continue;
+
+          // 只允许合法 header 名
+          if (!/^[a-z0-9-]+$/.test(k)) {
+            console.warn(`[Monitor] Illegal header removed: ${rawKey}`);
+            continue;
           }
+
+          out[k] = String(v);
         }
         return out;
       }
 
-      // ============================
-      // 2. 随机真实浏览器 UA
-      // ============================
-      const REAL_BROWSER_UA = [
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.3 Safari/605.1.15",
-        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/123.0.0.0 Safari/537.36",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:124.0) Gecko/20100101 Firefox/124.0",
-        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Edg/124.0.0.0 Safari/537.36"
-      ];
-
-      function randomUA() {
-        return REAL_BROWSER_UA[Math.floor(Math.random() * REAL_BROWSER_UA.length)];
-      }
 
       // ============================
       // 3. 自动补安全 Header
@@ -233,47 +240,23 @@ export class MonitorEngine extends DurableObject {
       function applySafeDefaults(headers: Record<string, string>, url: string) {
         const safe = { ...headers };
 
-        // 0. 自动补全 Host
-        if (!safe["Host"]) {
-          try {
-            safe["Host"] = new URL(url).host;
-          } catch (e) {
-            // URL 解析失败
-          }
-        }
+        const u = new URL(url);
+        const host = u.host;
+
+        // 0. Host 自动补全（如果用户没写）
+        if (!safe["host"]) safe["host"] = host;
 
         // 1. 基础浏览器标识
-        if (!safe["User-Agent"]) safe["User-Agent"] = randomUA();
-        if (!safe["Accept"]) {
-          safe["Accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7";
+        if (!safe["user-agent"]) safe["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36";
+        if (!safe["accept"]) {
+          safe["accept"] =
+            "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7";
         }
-        if (!safe["Accept-Language"]) safe["Accept-Language"] = "en-US,en;q=0.9";
-        if (!safe["Accept-Encoding"]) safe["Accept-Encoding"] = "gzip, deflate, br, zstd";
 
-        // 2. 强制不缓存 (确保探测的是实时状态)
-        if (!safe["Cache-Control"]) safe["Cache-Control"] = "no-cache";
-        if (!safe["Pragma"]) safe["Pragma"] = "no-cache";
-
-        // 3. 现代浏览器安全头 (Sec-Fetch 系列)
-        // 模拟直接在地址栏输入 URL 的行为 (navigate)
-        if (!safe["Sec-Fetch-Dest"]) safe["Sec-Fetch-Dest"] = "document";
-        if (!safe["Sec-Fetch-Mode"]) safe["Sec-Fetch-Mode"] = "navigate";
-        if (!safe["Sec-Fetch-Site"]) safe["Sec-Fetch-Site"] = "none";
-        if (!safe["Sec-Fetch-User"]) safe["Sec-Fetch-User"] = "?1";
-        if (!safe["Upgrade-Insecure-Requests"]) safe["Upgrade-Insecure-Requests"] = "1";
-
-        // 4. 自动补全 Referer (可选，模拟同站跳转)
-        if (!safe["Referer"]) {
-          try {
-            const origin = new URL(url).origin;
-            safe["Referer"] = origin + "/";
-          } catch (e) {
-            // URL 解析失败则不补
-          }
-        }
 
         return safe;
       }
+
 
       // ============================
       // 4. 解析 + 过滤 + 默认头
@@ -296,10 +279,12 @@ export class MonitorEngine extends DurableObject {
       // ============================
       // 5. 构造 fetchOptions
       // ============================
+      console.log(headers);
       const fetchOptions: any = {
         method: monitor.method || "GET",
         headers,
         signal: AbortSignal.timeout(25000),
+        redirect: "follow",
       };
 
       // ============================
@@ -339,7 +324,12 @@ export class MonitorEngine extends DurableObject {
       // ============================
       // 6. 执行请求
       // ============================
-      const res = await fetch(monitor.url, fetchOptions);
+      const res = await fetch(
+        monitor.url,
+        fetchOptions
+      )
+
+        ;
       statusCode = res.status;
       const latency = Date.now() - start;
       success = res.ok;
