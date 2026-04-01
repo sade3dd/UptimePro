@@ -45,7 +45,7 @@ export default {
         body { 
             font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
             background-color: #000; 
-           
+            color: #e4e4e7;
         }
         .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
         .glass { 
@@ -105,7 +105,7 @@ export default {
         .form-control, .form-select {
             background-color: #111 !important;
             border: 1px solid rgba(255, 255, 255, 0.1) !important;
-            
+            color: #fff !important;
             border-radius: 1rem;
             padding: 0.75rem 1rem;
         }
@@ -122,20 +122,21 @@ export default {
         .brand { font-weight: 900; letter-spacing: -0.05em; font-size: 2rem; color: #f8fafc; }
         .brand span { color: #10b981; }
         #engineStatusText { color: #60a5fa !important; }
-        .text-secondary { color: #94a3b8 !important;}
+        .text-secondary { color: #94a3b8 !important; }
+        .card-stat .h1 { color: #ffffff; }
         #upCount { color: #34d399 !important; }
         #downCount { color: #f87171 !important; }
         #operationalLabel { color: #10b981 !important; }
         #downLabel { color: #ef4444 !important; }
         #uptimeLabel { color: #60a5fa !important; }
         .form-label { color: #c084fc !important; }
-        .monitor-card h4 { color: #3a5977; }
+        .monitor-card h4 { color: #ffffff; }
         .monitor-card .latency-label { color: #a1a1aa !important; }
         .monitor-card .latency-value { color: #fbbf24 !important; }
         .monitor-card .checks-label { color: #c084fc !important; }
         .monitor-card .stable-label { color: #34d399 !important; }
         .monitor-card .check-label { color: #71717a !important; }
-        .monitor-card .check-value { color: #6d829e !important; }
+        .monitor-card .check-value { color: #e2e8f0 !important; }
         .hover-emerald:hover { color: #10b981 !important; }
     </style>
 </head>
@@ -202,6 +203,20 @@ export default {
                                 <input type="text" id="m_name" class="form-control" placeholder="Production API" required>
                             </div>
                             <div class="col-md-4">
+                                <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1" id="labelType">Monitor Type</label>
+                                <select id="m_type" class="form-select">
+                                    <option value="http" id="optHttp">HTTP/HTTPS</option>
+                                    <option value="tcp" id="optTcp">TCP Port</option>
+                                </select>
+                            </div>
+                        </div>
+                        <div class="row g-3 mb-4">
+                            <div class="col-md-8">
+                                <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1" id="labelUrl">Target Endpoint</label>
+                                <input type="url" id="m_url" class="form-control mono" placeholder="https://api.example.com/v1" required>
+                                <div class="small text-warning mt-1 ms-1" id="ipHint" style="font-size: 0.7rem;"></div>
+                            </div>
+                            <div class="col-md-4">
                                 <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1" id="labelMethod">HTTP Method</label>
                                 <select id="m_method" class="form-select">
                                     <option value="GET">GET</option>
@@ -210,11 +225,6 @@ export default {
                                     <option value="DELETE">DELETE</option>
                                 </select>
                             </div>
-                        </div>
-                        <div class="mb-4">
-                            <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1" id="labelUrl">Target Endpoint</label>
-                            <input type="url" id="m_url" class="form-control mono" placeholder="https://api.example.com/v1" required>
-                            <div class="small text-warning mt-1 ms-1" id="ipHint" style="font-size: 0.7rem;"></div>
                         </div>
                         <div class="mb-4">
                             <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1" id="labelHeaders">Custom Headers (JSON)</label>
@@ -294,12 +304,18 @@ export default {
                 edit_monitor: 'Edit Monitor',
                 clone_monitor: 'Clone Monitor',
                 test_notify: 'Test Notify',
-                label_body_type: 'Request Body Type',
+                label_body_type: 'Request Body Encoding',
                 opt_none: 'None',
                 opt_json: 'JSON (application/json)',
                 opt_form: 'Form (application/x-www-form-urlencoded)',
                 opt_raw: 'Raw (text/plain)',
-                ip_hint: 'Cloudflare Workers only support HTTP/HTTPS protocols. Direct IP monitoring is not supported.'
+                ip_hint: 'Cloudflare Workers only support HTTP/HTTPS protocols. Direct IP monitoring is not supported.',
+                label_type: 'Monitor Type',
+                opt_http: 'HTTP/HTTPS',
+                opt_tcp: 'TCP Port',
+                tcp_placeholder: 'example.com:22',
+                tcp_hint: 'Enter the target as host:port (e.g., example.com:22 or 1.1.1.1:53)',
+                label_url_tcp: 'Target Host:Port'
             },
             cn: {
                 engine_status: '边缘监控引擎',
@@ -331,12 +347,18 @@ export default {
                 edit_monitor: '编辑监控',
                 clone_monitor: '克隆监控',
                 test_notify: '测试通知',
-                label_body_type: '请求体类型',
+                label_body_type: '请求体编码',
                 opt_none: '无',
                 opt_json: 'JSON (application/json)',
                 opt_form: '表单 (application/x-www-form-urlencoded)',
                 opt_raw: '原始数据 (text/plain)',
-                ip_hint: 'Cloudflare Workers 仅支持 HTTP/HTTPS 协议，不支持直接 IP 监控。'
+                ip_hint: 'Cloudflare Workers 仅支持 HTTP/HTTPS 协议，不支持直接 IP 监控。',
+                label_type: '监控类型',
+                opt_http: 'HTTP/HTTPS',
+                opt_tcp: 'TCP 端口',
+                tcp_placeholder: 'example.com:22',
+                tcp_hint: '请输入目标地址，格式为 host:port (例如 example.com:22 或 1.1.1.1:53)',
+                label_url_tcp: '目标地址 (Host:Port)'
             }
         };
 
@@ -377,6 +399,9 @@ export default {
                 document.getElementById('optForm').textContent = this.t('opt_form');
                 document.getElementById('optRaw').textContent = this.t('opt_raw');
                 document.getElementById('ipHint').textContent = this.t('ip_hint');
+                document.getElementById('labelType').textContent = this.t('label_type');
+                document.getElementById('optHttp').textContent = this.t('opt_http');
+                document.getElementById('optTcp').textContent = this.t('opt_tcp');
                 
                 const logoutBtns = document.querySelectorAll('button[onclick="app.logout()"]');
                 logoutBtns.forEach(btn => btn.textContent = this.t('logout'));
@@ -448,7 +473,11 @@ export default {
                                     <h4 class="fw-black mb-1 tracking-tighter text-truncate" title="\${m.name}">\${m.name}</h4>
                                     <div class="d-flex align-items-center gap-3" style="min-width: 0;">
                                         <span class="small mono text-secondary text-truncate" style="max-width: 350px;" title="\${m.url}">\${m.url}</span>
-                                        <span class="badge bg-white bg-opacity-10 text-secondary border border-white border-opacity-10" style="flex-shrink: 0;">\${m.method}</span>
+                                        \${m.type === 'tcp' ? 
+                                            \`<span class="badge bg-white bg-opacity-10 text-warning border border-white border-opacity-10" style="flex-shrink: 0;">TCP</span>\` :
+                                            \`<span class="badge bg-white bg-opacity-10 text-secondary border border-white border-opacity-10" style="flex-shrink: 0;">\${m.method}</span>\`
+                                        }
+                                        \${m.type !== 'tcp' && m.body_type && m.body_type !== 'none' ? \`<span class="badge bg-white bg-opacity-10 text-info border border-white border-opacity-10 ms-1" style="flex-shrink: 0; font-size: 0.6rem;">\${m.body_type.toUpperCase()}</span>\` : ''}
                                     </div>
                                 </div>
                             </div>
@@ -497,7 +526,7 @@ export default {
                                     <div class="check-value small fw-bold text-secondary-emphasis">\${this.formatTime(m.next_check)}</div>
                                 </div>
                             </div>
-                            <div class="text-secondary" style="font-size: 1.0rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.1em;">
+                            <div class="text-secondary" style="font-size: 0.6rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.1em;">
                                 \${this.t('interval')}: \${m.interval}s
                             </div>
                         </div>
@@ -528,6 +557,7 @@ export default {
                 const id = document.getElementById('m_id').value;
                 const name = document.getElementById('m_name').value;
                 const url = document.getElementById('m_url').value;
+                const type = document.getElementById('m_type').value;
                 const method = document.getElementById('m_method').value;
                 const interval = parseInt(document.getElementById('m_interval').value);
                 const headers_str = document.getElementById('m_headers').value;
@@ -535,7 +565,7 @@ export default {
                 const body_type = document.getElementById('m_body_type').value;
                 const notify = document.getElementById('m_notify').checked;
 
-                const payload = { name, url, method, interval, notify, body, body_type };
+                const payload = { name, url, type, method, interval, notify, body, body_type };
                 if (headers_str) {
                     try {
                         payload.headers = JSON.parse(headers_str);
@@ -568,6 +598,7 @@ export default {
                 document.getElementById('m_id').value = m.id;
                 document.getElementById('m_name').value = m.name;
                 document.getElementById('m_url').value = m.url;
+                document.getElementById('m_type').value = m.type || 'http';
                 document.getElementById('m_method').value = m.method;
                 document.getElementById('m_interval').value = m.interval;
                 document.getElementById('m_headers').value = m.headers ? JSON.stringify(JSON.parse(m.headers), null, 2) : '';
@@ -578,6 +609,7 @@ export default {
                 document.getElementById('modalTitle').textContent = this.t('edit_monitor');
                 
                 const event = new Event('change');
+                document.getElementById('m_type').dispatchEvent(event);
                 document.getElementById('m_method').dispatchEvent(event);
                 
                 new bootstrap.Modal(document.getElementById('addMonitorModal')).show();
@@ -590,6 +622,7 @@ export default {
                 document.getElementById('m_id').value = '';
                 document.getElementById('m_name').value = m.name + ' (Copy)';
                 document.getElementById('m_url').value = m.url;
+                document.getElementById('m_type').value = m.type || 'http';
                 document.getElementById('m_method').value = m.method;
                 document.getElementById('m_interval').value = m.interval;
                 document.getElementById('m_headers').value = m.headers ? JSON.stringify(JSON.parse(m.headers), null, 2) : '';
@@ -600,6 +633,7 @@ export default {
                 document.getElementById('modalTitle').textContent = this.t('clone_monitor');
                 
                 const event = new Event('change');
+                document.getElementById('m_type').dispatchEvent(event);
                 document.getElementById('m_method').dispatchEvent(event);
                 
                 new bootstrap.Modal(document.getElementById('addMonitorModal')).show();
@@ -658,15 +692,80 @@ export default {
                     document.getElementById('m_id').value = '';
                     document.getElementById('modalTitle').textContent = this.t('new_monitor');
                     const event = new Event('change');
+                    document.getElementById('m_type').dispatchEvent(event);
                     document.getElementById('m_method').dispatchEvent(event);
                 });
 
+                document.getElementById('m_type').addEventListener('change', (e) => {
+                    const isTcp = e.target.value === 'tcp';
+                    const methodCol = document.getElementById('m_method').closest('.col-md-4');
+                    const headersGroup = document.getElementById('m_headers').closest('.mb-4');
+                    const bodyGroup = document.getElementById('bodyContainer');
+                    const urlCol = document.getElementById('m_url').closest('[class*="col-md-"]');
+                    const urlLabel = document.getElementById('labelUrl');
+                    const urlInput = document.getElementById('m_url');
+                    const ipHint = document.getElementById('ipHint');
+                    
+                    methodCol.classList.toggle('d-none', isTcp);
+                    headersGroup.classList.toggle('d-none', isTcp);
+                    
+                    if (isTcp) {
+                        bodyGroup.classList.add('d-none');
+                        urlInput.placeholder = this.t('tcp_placeholder');
+                        urlInput.type = 'text';
+                        urlLabel.textContent = this.t('label_url_tcp');
+                        urlCol.className = 'col-md-12';
+                        ipHint.textContent = this.t('tcp_hint');
+                        ipHint.classList.remove('text-danger', 'text-warning');
+                        ipHint.classList.add('text-info');
+                    } else {
+                        urlInput.placeholder = 'https://api.example.com/v1';
+                        urlInput.type = 'url';
+                        urlLabel.textContent = this.t('label_url');
+                        urlCol.className = 'col-md-8';
+                        ipHint.textContent = '';
+                        const method = document.getElementById('m_method').value;
+                        if (['POST', 'PUT', 'PATCH'].includes(method)) {
+                            bodyGroup.classList.remove('d-none');
+                        }
+                    }
+                });
+
                 document.getElementById('m_method').addEventListener('change', (e) => {
+                    const isTcp = document.getElementById('m_type').value === 'tcp';
+                    if (isTcp) return;
+                    
                     const bodyContainer = document.getElementById('bodyContainer');
                     if (['POST', 'PUT', 'PATCH'].includes(e.target.value)) {
                         bodyContainer.classList.remove('d-none');
                     } else {
                         bodyContainer.classList.add('d-none');
+                    }
+                });
+
+                document.getElementById('m_url').addEventListener('input', (e) => {
+                    const isTcp = document.getElementById('m_type').value === 'tcp';
+                    const hint = document.getElementById('ipHint');
+                    if (isTcp) {
+                        hint.textContent = this.t('tcp_hint');
+                        hint.classList.remove('text-danger', 'text-warning');
+                        hint.classList.add('text-info');
+                        return;
+                    }
+
+                    const url = e.target.value;
+                    try {
+                        const urlObj = new URL(url);
+                        const hostname = urlObj.hostname;
+                        if (/^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/.test(hostname) || hostname.includes(':')) {
+                            hint.textContent = this.t('ip_hint');
+                            hint.classList.add('text-danger');
+                            hint.classList.remove('text-warning', 'text-info');
+                        } else {
+                            hint.textContent = '';
+                        }
+                    } catch (e) {
+                        hint.textContent = '';
                     }
                 });
             }
