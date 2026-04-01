@@ -9,8 +9,6 @@ export interface Env {
   CAPTCHA_SALT?: string;
 }
 
-import { cacheResponse } from './utils';
-
 export default {
   async fetch(request: Request, env: Env): Promise<Response> {
     const url = new URL(request.url);
@@ -22,8 +20,7 @@ export default {
 
     // 排除内部触发和公开路由
     if (url.pathname !== "/internal/trigger") {
-      const jwtSecret = env.JWT_SECRET || 'k1PtweQ69UBRzdOIla2n6AJf9ovp3TvFBhvbeUIOxSmCEPOvQwfRGBuzeaHwKfjNIJb7JtaEruvYkjPUp5eZpZ';
-      const authenticated = await isAuthenticated(request, jwtSecret);
+      const authenticated = await isAuthenticated(request, env);
       if (!authenticated) {
         return Response.redirect(new URL("/login", request.url).toString(), 302);
       }
@@ -224,7 +221,18 @@ export default {
                             <textarea id="m_headers" class="form-control mono" rows="2" placeholder='{"Authorization": "Bearer token"}'></textarea>
                         </div>
                         <div class="mb-4 d-none" id="bodyContainer">
-                            <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1" id="labelBody">Request Payload (JSON)</label>
+                            <div class="row g-3 mb-3">
+                                <div class="col-md-12">
+                                    <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1" id="labelBodyType">Request Body Type</label>
+                                    <select id="m_body_type" class="form-select">
+                                        <option value="none" id="optNone">None</option>
+                                        <option value="json" id="optJson">JSON (application/json)</option>
+                                        <option value="form" id="optForm">Form (application/x-www-form-urlencoded)</option>
+                                        <option value="raw" id="optRaw">Raw (text/plain)</option>
+                                    </select>
+                                </div>
+                            </div>
+                            <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1" id="labelBody">Request Payload (JSON/Text)</label>
                             <textarea id="m_body" class="form-control mono" rows="3" placeholder='{"key": "value"}'></textarea>
                         </div>
                         <div class="row g-3 mb-4 align-items-end">
@@ -285,7 +293,12 @@ export default {
                 initialize: 'Initialize',
                 edit_monitor: 'Edit Monitor',
                 clone_monitor: 'Clone Monitor',
-                test_notify: 'Test Notify'
+                test_notify: 'Test Notify',
+                label_body_type: 'Request Body Type',
+                opt_none: 'None',
+                opt_json: 'JSON (application/json)',
+                opt_form: 'Form (application/x-www-form-urlencoded)',
+                opt_raw: 'Raw (text/plain)'
             },
             cn: {
                 engine_status: '边缘监控引擎',
@@ -305,7 +318,7 @@ export default {
                 label_method: 'HTTP 方法',
                 label_url: '目标地址',
                 label_headers: '自定义请求头 (JSON)',
-                label_body: '请求体 (JSON)',
+                label_body: '请求体 (JSON/Text)',
                 label_interval: '检查频率',
                 every_1m: '每 1 分钟',
                 every_5m: '每 5 分钟',
@@ -316,7 +329,12 @@ export default {
                 initialize: '立即初始化',
                 edit_monitor: '编辑监控',
                 clone_monitor: '克隆监控',
-                test_notify: '测试通知'
+                test_notify: '测试通知',
+                label_body_type: '请求体类型',
+                opt_none: '无',
+                opt_json: 'JSON (application/json)',
+                opt_form: '表单 (application/x-www-form-urlencoded)',
+                opt_raw: '原始数据 (text/plain)'
             }
         };
 
@@ -351,6 +369,11 @@ export default {
                 document.getElementById('notifyText').textContent = this.t('notify');
                 document.getElementById('cancelBtn').textContent = this.t('cancel');
                 document.getElementById('initBtn').textContent = this.t('initialize');
+                document.getElementById('labelBodyType').textContent = this.t('label_body_type');
+                document.getElementById('optNone').textContent = this.t('opt_none');
+                document.getElementById('optJson').textContent = this.t('opt_json');
+                document.getElementById('optForm').textContent = this.t('opt_form');
+                document.getElementById('optRaw').textContent = this.t('opt_raw');
                 
                 const logoutBtns = document.querySelectorAll('button[onclick="app.logout()"]');
                 logoutBtns.forEach(btn => btn.textContent = this.t('logout'));
@@ -507,9 +530,10 @@ export default {
                 const interval = parseInt(document.getElementById('m_interval').value);
                 const headers_str = document.getElementById('m_headers').value;
                 const body = document.getElementById('m_body').value;
+                const body_type = document.getElementById('m_body_type').value;
                 const notify = document.getElementById('m_notify').checked;
 
-                const payload = { name, url, method, interval, notify, body };
+                const payload = { name, url, method, interval, notify, body, body_type };
                 if (headers_str) {
                     try {
                         payload.headers = JSON.parse(headers_str);
@@ -546,6 +570,7 @@ export default {
                 document.getElementById('m_interval').value = m.interval;
                 document.getElementById('m_headers').value = m.headers ? JSON.stringify(JSON.parse(m.headers), null, 2) : '';
                 document.getElementById('m_body').value = m.body || '';
+                document.getElementById('m_body_type').value = m.body_type || 'none';
                 document.getElementById('m_notify').checked = m.notify === 1;
                 
                 document.getElementById('modalTitle').textContent = this.t('edit_monitor');
@@ -567,6 +592,7 @@ export default {
                 document.getElementById('m_interval').value = m.interval;
                 document.getElementById('m_headers').value = m.headers ? JSON.stringify(JSON.parse(m.headers), null, 2) : '';
                 document.getElementById('m_body').value = m.body || '';
+                document.getElementById('m_body_type').value = m.body_type || 'none';
                 document.getElementById('m_notify').checked = m.notify === 1;
                 
                 document.getElementById('modalTitle').textContent = this.t('clone_monitor');
