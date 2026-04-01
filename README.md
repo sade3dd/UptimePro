@@ -1,6 +1,7 @@
 # Uptime Pro 🚀
 
 一个轻量级、自托管的站点监控工具。基于 **Cloudflare Workers**、**Durable Objects** 和 **SQLite** 构建。
+# 有时候 1003 错误，
 
 ## ✨ 功能特性
 
