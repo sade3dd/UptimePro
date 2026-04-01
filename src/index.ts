@@ -45,7 +45,7 @@ export default {
         body { 
             font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
             background-color: #000; 
-            color: #e4e4e7;
+           
         }
         .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
         .glass { 
@@ -105,7 +105,7 @@ export default {
         .form-control, .form-select {
             background-color: #111 !important;
             border: 1px solid rgba(255, 255, 255, 0.1) !important;
-            color: #fff !important;
+            
             border-radius: 1rem;
             padding: 0.75rem 1rem;
         }
@@ -122,21 +122,20 @@ export default {
         .brand { font-weight: 900; letter-spacing: -0.05em; font-size: 2rem; color: #f8fafc; }
         .brand span { color: #10b981; }
         #engineStatusText { color: #60a5fa !important; }
-        .text-secondary { color: #94a3b8 !important; }
-        .card-stat .h1 { color: #ffffff; }
+        .text-secondary { color: #94a3b8 !important;}
         #upCount { color: #34d399 !important; }
         #downCount { color: #f87171 !important; }
         #operationalLabel { color: #10b981 !important; }
         #downLabel { color: #ef4444 !important; }
         #uptimeLabel { color: #60a5fa !important; }
         .form-label { color: #c084fc !important; }
-        .monitor-card h4 { color: #ffffff; }
+        .monitor-card h4 { color: #3a5977; }
         .monitor-card .latency-label { color: #a1a1aa !important; }
         .monitor-card .latency-value { color: #fbbf24 !important; }
         .monitor-card .checks-label { color: #c084fc !important; }
         .monitor-card .stable-label { color: #34d399 !important; }
         .monitor-card .check-label { color: #71717a !important; }
-        .monitor-card .check-value { color: #e2e8f0 !important; }
+        .monitor-card .check-value { color: #6d829e !important; }
         .hover-emerald:hover { color: #10b981 !important; }
     </style>
 </head>
@@ -215,6 +214,7 @@ export default {
                         <div class="mb-4">
                             <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1" id="labelUrl">Target Endpoint</label>
                             <input type="url" id="m_url" class="form-control mono" placeholder="https://api.example.com/v1" required>
+                            <div class="small text-warning mt-1 ms-1" id="ipHint" style="font-size: 0.7rem;"></div>
                         </div>
                         <div class="mb-4">
                             <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1" id="labelHeaders">Custom Headers (JSON)</label>
@@ -270,7 +270,7 @@ export default {
                 operational: 'Operational',
                 down: 'Down',
                 avg_uptime: 'Avg Uptime',
-                latency: 'Latency',
+                latency: 'Latest Latency',
                 last_checks: 'Last 60 Checks',
                 stable: 'Stable Connection',
                 last_check: 'Last Check',
@@ -298,7 +298,8 @@ export default {
                 opt_none: 'None',
                 opt_json: 'JSON (application/json)',
                 opt_form: 'Form (application/x-www-form-urlencoded)',
-                opt_raw: 'Raw (text/plain)'
+                opt_raw: 'Raw (text/plain)',
+                ip_hint: 'Cloudflare Workers only support HTTP/HTTPS protocols. Direct IP monitoring is not supported.'
             },
             cn: {
                 engine_status: '边缘监控引擎',
@@ -306,7 +307,7 @@ export default {
                 operational: '正常运行',
                 down: '检测到故障',
                 avg_uptime: '平均可用率',
-                latency: '延迟',
+                latency: '当前延迟',
                 last_checks: '最近 60 次检查',
                 stable: '连接稳定',
                 last_check: '上次检查',
@@ -334,7 +335,8 @@ export default {
                 opt_none: '无',
                 opt_json: 'JSON (application/json)',
                 opt_form: '表单 (application/x-www-form-urlencoded)',
-                opt_raw: '原始数据 (text/plain)'
+                opt_raw: '原始数据 (text/plain)',
+                ip_hint: 'Cloudflare Workers 仅支持 HTTP/HTTPS 协议，不支持直接 IP 监控。'
             }
         };
 
@@ -374,6 +376,7 @@ export default {
                 document.getElementById('optJson').textContent = this.t('opt_json');
                 document.getElementById('optForm').textContent = this.t('opt_form');
                 document.getElementById('optRaw').textContent = this.t('opt_raw');
+                document.getElementById('ipHint').textContent = this.t('ip_hint');
                 
                 const logoutBtns = document.querySelectorAll('button[onclick="app.logout()"]');
                 logoutBtns.forEach(btn => btn.textContent = this.t('logout'));
@@ -420,7 +423,7 @@ export default {
                 
                 this.monitors.forEach(m => {
                     const monitorLogs = this.logs[m.id] || [];
-                    const avgLatency = monitorLogs.length ? Math.round(monitorLogs.reduce((a, b) => a + b.latency, 0) / monitorLogs.length) : 0;
+                    const latestLatency = monitorLogs.length ? monitorLogs[monitorLogs.length - 1].latency : 0;
                     
                     const card = document.createElement('div');
                     card.className = 'glass monitor-card';
@@ -439,20 +442,20 @@ export default {
 
                     card.innerHTML = \`
                         <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-4 mb-4">
-                            <div class="d-flex align-items-center gap-4">
-                                <div class="status-dot \${m.status === 'up' ? 'status-up' : 'status-down'}"></div>
-                                <div>
-                                    <h4 class="fw-black mb-1 tracking-tighter">\${m.name}</h4>
-                                    <div class="d-flex align-items-center gap-3">
-                                        <span class="small mono text-secondary">\${m.url}</span>
-                                        <span class="badge bg-white bg-opacity-10 text-secondary border border-white border-opacity-10">\${m.method}</span>
+                            <div class="d-flex align-items-center gap-4" style="min-width: 0; flex: 1;">
+                                <div class="status-dot \${m.status === 'up' ? 'status-up' : 'status-down'}" style="flex-shrink: 0;"></div>
+                                <div style="min-width: 0; flex: 1;">
+                                    <h4 class="fw-black mb-1 tracking-tighter text-truncate" title="\${m.name}">\${m.name}</h4>
+                                    <div class="d-flex align-items-center gap-3" style="min-width: 0;">
+                                        <span class="small mono text-secondary text-truncate" style="max-width: 350px;" title="\${m.url}">\${m.url}</span>
+                                        <span class="badge bg-white bg-opacity-10 text-secondary border border-white border-opacity-10" style="flex-shrink: 0;">\${m.method}</span>
                                     </div>
                                 </div>
                             </div>
-                            <div class="d-flex gap-5 text-end align-items-center">
+                            <div class="d-flex gap-5 text-end align-items-center" style="flex-shrink: 0;">
                                 <div>
                                     <div class="latency-label text-secondary small fw-bold text-uppercase tracking-wider mb-1">\${this.t('latency')}</div>
-                                    <div class="latency-value h5 fw-black mono mb-0">\${avgLatency}<span class="fs-6 text-secondary ms-1">ms</span></div>
+                                    <div class="latency-value h5 fw-black mono mb-0">\${latestLatency}<span class="fs-6 text-secondary ms-1">ms</span></div>
                                 </div>
                                 <div class="d-flex gap-2">
                                     <button onclick="app.cloneMonitor('\${m.id}')" class="btn btn-link text-secondary p-2 hover-emerald" title="\${this.t('clone_monitor')}">
@@ -467,7 +470,6 @@ export default {
                                 </div>
                             </div>
                         </div>
-
                         \${sparklinePath ? \`
                         <div class="mb-3 h-10 w-100 rounded-3 overflow-hidden" style="background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.1);">
                             <svg class="w-100 h-100" preserveAspectRatio="none" viewBox="0 0 100 25">
@@ -495,7 +497,7 @@ export default {
                                     <div class="check-value small fw-bold text-secondary-emphasis">\${this.formatTime(m.next_check)}</div>
                                 </div>
                             </div>
-                            <div class="text-secondary" style="font-size: 0.6rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.1em;">
+                            <div class="text-secondary" style="font-size: 1.0rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.1em;">
                                 \${this.t('interval')}: \${m.interval}s
                             </div>
                         </div>
