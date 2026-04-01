@@ -1,9 +1,11 @@
 import { DurableObject } from "cloudflare:workers";
+import { connect } from "cloudflare:sockets";
 import auth, { UNAUTH_ROUTES } from "./auth";
 
 export class MonitorEngine extends DurableObject {
   state: DurableObjectState;
   env: any;
+  private initialized = false;
 
   constructor(state: DurableObjectState, env: any) {
     super(state, env);
@@ -19,6 +21,7 @@ export class MonitorEngine extends DurableObject {
         name TEXT NOT NULL,
         url TEXT NOT NULL,
         method TEXT DEFAULT 'GET',
+        type TEXT DEFAULT 'http', -- http, tcp
         headers TEXT,
         body TEXT,
         body_type TEXT DEFAULT 'none', -- none, json, form, raw
@@ -39,11 +42,22 @@ export class MonitorEngine extends DurableObject {
         timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
       );
     `);
+
+    // 尝试添加 type 列（用于平滑升级）
+    try {
+      this.state.storage.sql.exec("ALTER TABLE monitors ADD COLUMN type TEXT DEFAULT 'http'");
+    } catch (e) {
+      // 列可能已存在
+    }
   }
 
   async fetch(request: Request) {
     const url = new URL(request.url);
-    await this.initTable();
+    
+    if (!this.initialized) {
+      await this.initTable();
+      this.initialized = true;
+    }
 
     const corsHeaders = {
       "Access-Control-Allow-Origin": "*",
@@ -63,8 +77,8 @@ export class MonitorEngine extends DurableObject {
     if (url.pathname === "/api/monitors" && request.method === "POST") {
       const body = await request.json() as any;
       this.state.storage.sql.exec(
-        "INSERT INTO monitors (name, url, method, headers, body, body_type, interval, notify, next_check, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        body.name, body.url, body.method || 'GET',
+        "INSERT INTO monitors (name, url, method, type, headers, body, body_type, interval, notify, next_check, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        body.name, body.url, body.method || 'GET', body.type || 'http',
         body.headers ? JSON.stringify(body.headers) : null,
         body.body || null,
         body.body_type || 'none',
@@ -82,8 +96,8 @@ export class MonitorEngine extends DurableObject {
       const id = url.pathname.split("/").pop();
       const body = await request.json() as any;
       this.state.storage.sql.exec(
-        "UPDATE monitors SET name = ?, url = ?, method = ?, headers = ?, body = ?, body_type = ?, interval = ?, notify = ? WHERE id = ?",
-        body.name, body.url, body.method || 'GET',
+        "UPDATE monitors SET name = ?, url = ?, method = ?, type = ?, headers = ?, body = ?, body_type = ?, interval = ?, notify = ? WHERE id = ?",
+        body.name, body.url, body.method || 'GET', body.type || 'http',
         body.headers ? JSON.stringify(body.headers) : null,
         body.body || null,
         body.body_type || 'none',
@@ -136,6 +150,10 @@ export class MonitorEngine extends DurableObject {
    * ====================== 优化后的 Alarm 处理队列 ======================
    */
   async alarm() {
+    if (!this.initialized) {
+      await this.initTable();
+      this.initialized = true;
+    }
     const now = new Date().toISOString();
 
     // 0. 定期清理旧日志 (保留最近 7 天)
@@ -189,6 +207,10 @@ export class MonitorEngine extends DurableObject {
   }
 
   async checkSite(monitor: any) {
+    if (monitor.type === 'tcp') {
+      return this.checkTcp(monitor);
+    }
+
     let success = false;
     const start = Date.now();
     let statusCode = 0;
@@ -247,13 +269,11 @@ export class MonitorEngine extends DurableObject {
         if (!safe["host"]) safe["host"] = host;
 
         // 1. 基础浏览器标识
-        if (!safe["user-agent"]) safe["user-agent"] = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/145.0.0.0 Safari/537.36";
+        if (!safe["user-agent"]) safe["user-agent"] = 'UptimeProCF/1.0 (+https://github.com/sade3dd/UptimePro)';
         if (!safe["accept"]) {
           safe["accept"] =
             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7";
         }
-
-
         return safe;
       }
 
@@ -285,6 +305,11 @@ export class MonitorEngine extends DurableObject {
         headers,
         signal: AbortSignal.timeout(25000),
         redirect: "follow",
+        cf: {
+          cacheTtlByStatus: {
+            '100-599': -1, 
+          }
+        }
       };
 
       // ============================
@@ -370,6 +395,79 @@ export class MonitorEngine extends DurableObject {
     // ============================
     if (monitor.status !== "unknown" && monitor.status !== newStatus && monitor.notify === 1) {
       this.sendNotification(monitor, newStatus, statusCode, errorMessage).catch(e => {
+        console.error("[MonitorEngine] 通知发送失败:", e);
+      });
+    }
+  }
+
+  async checkTcp(monitor: any) {
+    let success = false;
+    const start = Date.now();
+    let errorMessage = "";
+    let socket: any = null;
+
+    try {
+      console.log(`[Monitor] 开始 TCP 检查 ${monitor.url}`);
+
+      let host = "";
+      let port = 0;
+
+      if (monitor.url.includes(":")) {
+        const parts = monitor.url.replace("tcp://", "").split(":");
+        host = parts[0];
+        port = parseInt(parts[1]);
+      } else {
+        host = monitor.url.replace("tcp://", "");
+        port = 80;
+      }
+
+      if (!host || isNaN(port)) {
+        throw new Error("Invalid TCP address format. Use host:port");
+      }
+
+      socket = connect({ hostname: host, port: port });
+
+      // 等待连接建立
+      const timeoutPromise = new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("TCP Connection Timeout")), 15000)
+      );
+
+      await Promise.race([socket.opened, timeoutPromise]);
+
+      success = true;
+      console.log(`[Monitor] TCP ${host}:${port} - OK`);
+    } catch (e: any) {
+      success = false;
+      errorMessage = e.message || "TCP Connection Error";
+      console.error(`[Monitor] TCP ${monitor.url} - ERROR: ${errorMessage}`);
+    } finally {
+      if (socket) {
+        socket.close().catch(() => { });
+      }
+    }
+
+    // ============================
+    // 更新数据库 + 写入日志
+    // ============================
+    const latency = Date.now() - start;
+    const newStatus = success ? "up" : "down";
+    const nextCheck = new Date(Date.now() + monitor.interval * 1000).toISOString();
+
+    this.state.storage.sql.exec(
+      "UPDATE monitors SET status = ?, last_check = ?, next_check = ? WHERE id = ?",
+      newStatus, new Date().toISOString(), nextCheck, monitor.id
+    );
+
+    this.state.storage.sql.exec(
+      "INSERT INTO logs (monitor_id, status_code, latency, success) VALUES (?, ?, ?, ?)",
+      monitor.id, success ? 200 : 0, latency, success ? 1 : 0
+    );
+
+    // ============================
+    // 状态变更通知
+    // ============================
+    if (monitor.status !== "unknown" && monitor.status !== newStatus && monitor.notify === 1) {
+      this.sendNotification(monitor, newStatus, success ? 200 : 0, errorMessage).catch(e => {
         console.error("[MonitorEngine] 通知发送失败:", e);
       });
     }
