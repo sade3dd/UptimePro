@@ -1,59 +1,63 @@
-import { DurableObject } from "cloudflare:workers";
+import { DurableObject, env } from "cloudflare:workers";
 import { connect } from "cloudflare:sockets";
-import auth, { UNAUTH_ROUTES } from "./auth";
+import { encode, decode } from "@msgpack/msgpack";
 
 export class MonitorEngine extends DurableObject {
   state: DurableObjectState;
   env: any;
   private initialized = false;
+  private monitors = new Map<string, any>();
+  private kvMemory = new Map<string, any>();
 
   constructor(state: DurableObjectState, env: any) {
     super(state, env);
     this.state = state;
     this.env = env;
   }
-
+  
   // ====================== 初始化表 ======================
   async initTable() {
     this.state.storage.sql.exec(`
-      CREATE TABLE IF NOT EXISTS monitors (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        url TEXT NOT NULL,
-        method TEXT DEFAULT 'GET',
-        type TEXT DEFAULT 'http', -- http, tcp
-        headers TEXT,
-        body TEXT,
-        body_type TEXT DEFAULT 'none', -- none, json, form, raw
-        interval INTEGER DEFAULT 60,
-        notify INTEGER DEFAULT 1, -- 0: 禁用, 1: 启用
-        status TEXT DEFAULT 'unknown',
-        last_check DATETIME,
-        next_check DATETIME DEFAULT CURRENT_TIMESTAMP,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      );
-
-      CREATE TABLE IF NOT EXISTS logs (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        monitor_id INTEGER,
-        status_code INTEGER,
-        latency INTEGER,
-        success INTEGER,
-        timestamp DATETIME DEFAULT CURRENT_TIMESTAMP
+      CREATE TABLE IF NOT EXISTS data_store (
+        key TEXT PRIMARY KEY,
+        value BLOB
       );
     `);
 
-    // 尝试添加 type 列（用于平滑升级）
-    try {
-      this.state.storage.sql.exec("ALTER TABLE monitors ADD COLUMN type TEXT DEFAULT 'http'");
-    } catch (e) {
-      // 列可能已存在
+    // 从 SQLite 加载数据到内存
+    const rows = this.state.storage.sql.exec("SELECT key, value FROM data_store").toArray();
+    for (const row of rows) {
+      const key = row.key as string;
+      try {
+        // 尝试用 MessagePack 解码
+        const value: any = decode(row.value as ArrayBuffer);
+        if (key === 'monitors') {
+          this.monitors = new Map(Object.entries(value));
+        }
+      } catch (e) {
+        // 如果解码失败，尝试用 JSON 解码
+        try {
+          const value = JSON.parse(new TextDecoder().decode(row.value as ArrayBuffer));
+          if (key === 'monitors') {
+            this.monitors = new Map(Object.entries(value));
+          }
+        } catch (jsonError) {
+          console.error('Failed to parse stored data:', jsonError);
+        }
+      }
     }
+    this.initialized = true;
   }
+
+  async saveToSqlite() {
+    const monitorsData = encode(Object.fromEntries(this.monitors));
+    this.state.storage.sql.exec("INSERT OR REPLACE INTO data_store (key, value) VALUES ('monitors', ?)", monitorsData);
+  }
+
 
   async fetch(request: Request) {
     const url = new URL(request.url);
-    
+
     if (!this.initialized) {
       await this.initTable();
       this.initialized = true;
@@ -69,79 +73,107 @@ export class MonitorEngine extends DurableObject {
 
     // API: 获取监控项
     if (url.pathname === "/api/monitors" && request.method === "GET") {
-      const cursor = this.state.storage.sql.exec("SELECT * FROM monitors ORDER BY created_at DESC");
-      return Response.json(cursor.toArray(), { headers: corsHeaders });
+      const monitors = Array.from(this.monitors.values());
+      return Response.json(monitors, { headers: corsHeaders });
     }
 
-    // API: 添加监控项 (立即执行)
+    // API: 添加监控项
     if (url.pathname === "/api/monitors" && request.method === "POST") {
       const body = await request.json() as any;
-      this.state.storage.sql.exec(
-        "INSERT INTO monitors (name, url, method, type, headers, body, body_type, interval, notify, next_check, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
-        body.name, body.url, body.method || 'GET', body.type || 'http',
-        body.headers ? JSON.stringify(body.headers) : null,
-        body.body || null,
-        body.body_type || 'none',
-        body.interval || 60,
-        body.notify === false ? 0 : 1,
-        new Date().toISOString(),
-        new Date().toISOString()
-      );
-      await this.state.storage.setAlarm(Date.now());
+      // 确保 headers 是 JSON 字符串
+      if (body.headers && typeof body.headers === 'object') {
+        body.headers = JSON.stringify(body.headers);
+      }
+      const id = crypto.randomUUID();
+      const newMonitor = {
+        id,
+        ...body,
+        method: body.method || 'GET',
+        type: body.type || 'http',
+        interval: body.interval || 60,
+        notify: body.notify === false ? 0 : 1,
+        status: 'unknown',
+        last_check: null,
+        next_check: new Date().toISOString(),
+        created_at: new Date().toISOString(),
+        logs: []
+      };
+      this.monitors.set(id, newMonitor);
+      await this.saveToSqlite();
+      await this.state.storage.setAlarm(Date.now() + 1000);
       return Response.json({ success: true }, { headers: corsHeaders });
     }
 
     // API: 修改监控项
     if (url.pathname.startsWith("/api/monitors/") && request.method === "PUT") {
       const id = url.pathname.split("/").pop();
-      const body = await request.json() as any;
-      this.state.storage.sql.exec(
-        "UPDATE monitors SET name = ?, url = ?, method = ?, type = ?, headers = ?, body = ?, body_type = ?, interval = ?, notify = ? WHERE id = ?",
-        body.name, body.url, body.method || 'GET', body.type || 'http',
-        body.headers ? JSON.stringify(body.headers) : null,
-        body.body || null,
-        body.body_type || 'none',
-        body.interval || 60,
-        body.notify === false ? 0 : 1,
-        id
-      );
-      return Response.json({ success: true }, { headers: corsHeaders });
+      if (id && this.monitors.has(id)) {
+        const body = await request.json() as any;
+        // 确保 headers 是 JSON 字符串
+        if (body.headers && typeof body.headers === 'object') {
+          body.headers = JSON.stringify(body.headers);
+        }
+        const monitor = this.monitors.get(id);
+        this.monitors.set(id, { ...monitor, ...body });
+        await this.saveToSqlite();
+        return Response.json({ success: true }, { headers: corsHeaders });
+      }
+      return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
     }
 
     // API: 删除监控项
     if (url.pathname.startsWith("/api/monitors/") && request.method === "DELETE") {
       const id = url.pathname.split("/").pop();
-      this.state.storage.sql.exec("DELETE FROM monitors WHERE id = ?", id);
-      this.state.storage.sql.exec("DELETE FROM logs WHERE monitor_id = ?", id);
-      return Response.json({ success: true }, { headers: corsHeaders });
+      if (id && this.monitors.has(id)) {
+        this.monitors.delete(id);
+        await this.saveToSqlite();
+        return Response.json({ success: true }, { headers: corsHeaders });
+      }
+      return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
     }
 
     // API: 测试 TG 通知
-    if (url.pathname === "/api/test-notify" && request.method === "POST") {
-      const testMonitor = {
+    if (url.pathname.startsWith("/api/test-notify") && request.method === "POST") {
+      const id = url.pathname.split("/").pop();
+      let testMonitor: any = {
         name: "Test Monitor",
         url: "https://example.com"
       };
+
+      if (id && id !== "test-notify") {
+        const m = this.monitors.get(id);
+        if (m) testMonitor = m;
+      }
+
       await this.sendNotification(testMonitor, "down", 500, "This is a test notification from Uptime Pro.");
-      return Response.json({ success: true }, { headers: corsHeaders });
+      return Response.json({ success: true, message: 'Test notification sent!' }, { headers: corsHeaders });
     }
 
-    // API: 获取日志 (用于状态图)
+    // API: 获取所有日志 (合并获取)
+    if (url.pathname === "/api/logs" && request.method === "GET") {
+      const allLogs: Record<string, any> = {};
+      for (const [id, m] of this.monitors) {
+        allLogs[id] = m.logs;
+      }
+      return Response.json(allLogs, { headers: corsHeaders });
+    }
+
+    // API: 获取单个监控项日志
     if (url.pathname.startsWith("/api/logs/") && request.method === "GET") {
       const id = url.pathname.split("/").pop();
-      const cursor = this.state.storage.sql.exec(
-        "SELECT * FROM logs WHERE monitor_id = ? ORDER BY timestamp DESC LIMIT 60",
-        id
-      );
-      return Response.json(cursor.toArray(), { headers: corsHeaders });
+      if (id && this.monitors.has(id)) {
+        return Response.json(this.monitors.get(id).logs, { headers: corsHeaders });
+      }
+      return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
     }
 
     if (url.pathname === "/trigger") {
       if (!(await this.state.storage.getAlarm())) {
-        await this.state.storage.setAlarm(Date.now());
+        await this.state.storage.setAlarm(Date.now() + 1000);
       }
       return new Response("OK");
     }
+ 
 
     return new Response("Not Found", { status: 404 });
   }
@@ -151,58 +183,60 @@ export class MonitorEngine extends DurableObject {
    */
   async alarm() {
     if (!this.initialized) {
+      console.log('初始化数据库');
       await this.initTable();
+      await this.state.storage.setAlarm(Date.now() + 3000);
       this.initialized = true;
+    } else {
+      console.log('数据库已初始化 ');
     }
-    const now = new Date().toISOString();
-
-    // 0. 定期清理旧日志 (保留最近 7 天)
-    const sevenDaysAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
-    this.state.storage.sql.exec("DELETE FROM logs WHERE timestamp < ?", sevenDaysAgo);
+    const now = Date.now();
 
     // 1. 仅选择到期的任务，且每次限制 5 个并发，防止超时
-    const cursor = this.state.storage.sql.exec(
-      "SELECT * FROM monitors WHERE next_check <= ? LIMIT 5",
-      now
-    );
-    const dueMonitors = cursor.toArray();
+    const dueMonitors = Array.from(this.monitors.values()).filter(m => new Date(m.next_check).getTime() <= now).slice(0, 5);
 
     if (dueMonitors.length > 0) {
       console.log(`[MonitorEngine] 正在处理 ${dueMonitors.length} 个到期任务...`);
 
       // 2. 并发执行
-      await Promise.allSettled(dueMonitors.map((m: any) => this.checkSite(m)));
+      // 2. 并发执行（带间隔）
+      await Promise.allSettled(dueMonitors.map(async (m: any, index: number) => {
+        // 添加间隔，防止 429 错误
+        if (index > 0) {
+          await new Promise(resolve => setTimeout(resolve, 1200)); // 1.2秒间隔
+        }
+        return this.checkSite(m);
+      }));
 
       // 3. 链式调用：检查是否还有剩余到期任务
-      const remainingRow = this.state.storage.sql.exec(
-        "SELECT count(*) as count FROM monitors WHERE next_check <= ?",
-        now
-      ).toArray()[0];
-
-      // 修复：显式转换为 Number
-      const remaining = remainingRow ? Number(remainingRow.count) : 0;
+      const remaining = Array.from(this.monitors.values()).filter(m => new Date(m.next_check).getTime() <= now).length;
 
       if (remaining > 0) {
+        await this.saveToSqlite();
         console.log(`[MonitorEngine] 还有 ${remaining} 个任务等待处理，1秒后继续...`);
-        await this.state.storage.setAlarm(Date.now() + 1000); // 1秒后再次触发，实现连续执行
+        await this.state.storage.setAlarm(Date.now() + 1000);
         return;
       }
     }
 
     // 4. 如果没有到期任务，寻找最近的一个任务时间并设定闹钟
-    const nextTask = this.state.storage.sql.exec(
-      "SELECT next_check FROM monitors ORDER BY next_check ASC LIMIT 1"
-    ).toArray()[0];
+    const nextTask = Array.from(this.monitors.values())
+      .filter(m => new Date(m.next_check).getTime() > now)
+      .sort((a, b) => new Date(a.next_check).getTime() - new Date(b.next_check).getTime())[0];
 
-    if (nextTask && nextTask.next_check) {
-      // 修复：将 next_check 断言为 string，因为 SQLite 的 DATETIME 返回的是字符串
-      const nextTime = new Date(nextTask.next_check as string).getTime();
-      const delay = Math.max(1000, nextTime - Date.now());
-      console.log(`[MonitorEngine] 无即时任务，下次任务在 ${delay / 1000}s 后`);
+    await this.saveToSqlite();
+
+    if (nextTask) {
+      const nextTime = new Date(nextTask.next_check).getTime();
+      const delay = Math.min(60000, Math.max(10000, nextTime - now)); // 最长60秒
+      const nextTimeStr = new Date(Date.now() + delay).toLocaleString();
+      console.log(`[MonitorEngine] 无即时任务，下次任务在 ${nextTimeStr}`);
       await this.state.storage.setAlarm(Date.now() + delay);
     } else {
-      // 彻底没任务，1分钟后醒来检查一次（保活）
-      await this.state.storage.setAlarm(Date.now() + 60000);
+      // 彻底没任务，30秒后醒来检查一次（保活）
+      const nextTimeStr = new Date(Date.now() + 30000).toLocaleString();
+      console.log(`[MonitorEngine] 无任务，30秒后检查（保活） ${nextTimeStr}`);
+      await this.state.storage.setAlarm(Date.now() + 30000);
     }
   }
 
@@ -259,7 +293,7 @@ export class MonitorEngine extends DurableObject {
       // ============================
       // 3. 自动补安全 Header
       // ============================
-      function applySafeDefaults(headers: Record<string, string>, url: string) {
+      function applySafeDefaults(headers: Record<string, string>, url: string, userAgent: string) {
         const safe = { ...headers };
 
         const u = new URL(url);
@@ -269,7 +303,7 @@ export class MonitorEngine extends DurableObject {
         if (!safe["host"]) safe["host"] = host;
 
         // 1. 基础浏览器标识
-        if (!safe["user-agent"]) safe["user-agent"] = 'UptimeProCF/1.0 (+https://github.com/sade3dd/UptimePro)';
+        if (!safe["user-agent"]) safe["user-agent"] =  userAgent;
         if (!safe["accept"]) {
           safe["accept"] =
             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7";
@@ -285,7 +319,12 @@ export class MonitorEngine extends DurableObject {
 
       if (monitor.headers) {
         try {
-          const parsed = JSON.parse(monitor.headers);
+          let parsed;
+          if (typeof monitor.headers === 'string') {
+            parsed = JSON.parse(monitor.headers);
+          } else if (typeof monitor.headers === 'object' && monitor.headers !== null) {
+            parsed = monitor.headers;
+          }
           if (parsed && typeof parsed === "object") {
             headers = sanitizeHeaders(parsed);
           }
@@ -294,20 +333,19 @@ export class MonitorEngine extends DurableObject {
         }
       }
 
-      headers = applySafeDefaults(headers, monitor.url);
+      headers = applySafeDefaults(headers, monitor.url, this.env?.USER_AGENT || "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36");
 
       // ============================
       // 5. 构造 fetchOptions
       // ============================
-      console.log(headers);
       const fetchOptions: any = {
         method: monitor.method || "GET",
         headers,
         signal: AbortSignal.timeout(25000),
-        redirect: "follow",
+        redirect: "manual",
         cf: {
           cacheTtlByStatus: {
-            '100-599': -1, 
+            '100-599': -1,
           }
         }
       };
@@ -349,12 +387,23 @@ export class MonitorEngine extends DurableObject {
       // ============================
       // 6. 执行请求
       // ============================
-      const res = await fetch(
+      let res = await fetch(
         monitor.url,
         fetchOptions
-      )
+      );
+      // 处理重定向
+      let redirectCount = 0;
+      const maxRedirects = 3; // 最大重定向次数
 
-        ;
+      while (res.status >= 300 && res.status < 400 && redirectCount < maxRedirects) {
+        const location = res.headers.get('location');
+        if (!location) break;
+
+        // 构建完整的重定向 URL
+        const redirectUrl = new URL(location, monitor.url).href;
+        res = await fetch(redirectUrl, fetchOptions);
+        redirectCount++;
+      }
       statusCode = res.status;
       const latency = Date.now() - start;
       success = res.ok;
@@ -374,21 +423,32 @@ export class MonitorEngine extends DurableObject {
     }
 
     // ============================
-    // 7. 更新数据库 + 写入日志
+    // 7. 更新内存数据 + 写入日志
     // ============================
     const latency = Date.now() - start;
     const newStatus = success ? "up" : "down";
-    const nextCheck = new Date(Date.now() + monitor.interval * 1000).toISOString();
+    const nextCheck = new Date(Date.now() + (monitor.interval || 60) * 1000).toISOString();
 
-    this.state.storage.sql.exec(
-      "UPDATE monitors SET status = ?, last_check = ?, next_check = ? WHERE id = ?",
-      newStatus, new Date().toISOString(), nextCheck, monitor.id
-    );
+    const monitorData = this.monitors.get(monitor.id);
+    if (monitorData) {
+      monitorData.status = newStatus;
+      monitorData.last_check = new Date().toISOString();
+      monitorData.next_check = nextCheck;
+      monitorData.latency = latency;
 
-    this.state.storage.sql.exec(
-      "INSERT INTO logs (monitor_id, status_code, latency, success) VALUES (?, ?, ?, ?)",
-      monitor.id, statusCode, latency, success ? 1 : 0
-    );
+      // 添加日志并限制为 60 条
+      monitorData.logs.push({
+        status_code: statusCode,
+        latency,
+        success: success ? 1 : 0,
+        timestamp: new Date().toISOString()
+      });
+      if (monitorData.logs.length > 60) {
+        monitorData.logs.shift();
+      }
+
+      this.monitors.set(monitor.id, monitorData);
+    }
 
     // ============================
     // 8. 状态变更通知
@@ -447,21 +507,32 @@ export class MonitorEngine extends DurableObject {
     }
 
     // ============================
-    // 更新数据库 + 写入日志
+    // 更新内存数据 + 写入日志
     // ============================
     const latency = Date.now() - start;
     const newStatus = success ? "up" : "down";
-    const nextCheck = new Date(Date.now() + monitor.interval * 1000).toISOString();
+    const nextCheck = new Date(Date.now() + (monitor.interval || 60) * 1000).toISOString();
 
-    this.state.storage.sql.exec(
-      "UPDATE monitors SET status = ?, last_check = ?, next_check = ? WHERE id = ?",
-      newStatus, new Date().toISOString(), nextCheck, monitor.id
-    );
+    const monitorData = this.monitors.get(monitor.id);
+    if (monitorData) {
+      monitorData.status = newStatus;
+      monitorData.last_check = new Date().toISOString();
+      monitorData.next_check = nextCheck;
+      monitorData.latency = latency;
 
-    this.state.storage.sql.exec(
-      "INSERT INTO logs (monitor_id, status_code, latency, success) VALUES (?, ?, ?, ?)",
-      monitor.id, success ? 200 : 0, latency, success ? 1 : 0
-    );
+      // 添加日志并限制为 60 条
+      monitorData.logs.push({
+        status_code: success ? 200 : 0,
+        latency,
+        success: success ? 1 : 0,
+        timestamp: new Date().toISOString()
+      });
+      if (monitorData.logs.length > 60) {
+        monitorData.logs.shift();
+      }
+
+      this.monitors.set(monitor.id, monitorData);
+    }
 
     // ============================
     // 状态变更通知
@@ -515,15 +586,17 @@ export class MonitorEngine extends DurableObject {
   }
 
   // ====================== KV 操作接口 (用于 Auth) ======================
+  // ====================== KV 操作接口 (用于 Auth) ======================
   async kvGet(key: string) {
-    return await this.state.storage.get(key);
+    const value = this.kvMemory.get(key);
+    return value;
   }
 
   async kvPut(key: string, value: any) {
-    await this.state.storage.put(key, value);
+    this.kvMemory.set(key, value);
   }
 
   async kvDelete(key: string) {
-    await this.state.storage.delete(key);
+    this.kvMemory.delete(key);
   }
 }
