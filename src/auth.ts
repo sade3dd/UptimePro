@@ -2,7 +2,7 @@ import { Hono } from 'hono';
 import { sign, verify } from 'hono/jwt';
 import type { Context, Next } from 'hono';
 import { getCookie, setCookie } from 'hono/cookie';
-import { cacheResponse } from './utils';
+
 // 定义无需认证的路由
 export const UNAUTH_ROUTES = {
   CAPTCHA: '/captcha',
@@ -10,21 +10,10 @@ export const UNAUTH_ROUTES = {
   LOGOUT: '/scdfdsferty456ghfhSASkkxjdsiufs8d880d9d9fjjJUUS8-8JJ_SXJK_cs/',
 } as const;
 
-// KV 操作类，封装对 Durable Object 的 RPC 调用
-class KVStorage {
-  private obj: any;
-  constructor(env: any) {
-    const id = env.MONITOR_ENGINE.idFromName("global_monitor");
-    this.obj = env.MONITOR_ENGINE.get(id);
-  }
-  async get(key: string) { return await this.obj.kvGet(key); }
-  async put(key: string, value: any) { await this.obj.kvPut(key, value); }
-  async delete(key: string) { await this.obj.kvDelete(key); }
-}
-
 // 定义数据结构
 interface CaptchaData {
   hashedCaptcha: string;
+  expectedLoginHash: string;
   text: string;
   expires: number;
 }
@@ -37,11 +26,16 @@ interface UserData {
 let globalStore: {
   captcha: Map<string, CaptchaData>;
   requestTimestamps: Map<string, number[]>;
+  
+
+  admin: {
+    username: string;
+    passwordHash: string;
+  }
 } | undefined;
 
 // 初始化全局存储的辅助函数
 async function ensureStore(env: any) {
-  const storage = new KVStorage(env);
   const currentUsername = env.FIXED_USERNAME || 'admin';
   const currentPassword = env.FIXED_PASSWORD || 'password';
   const currentHashedPassword = await hashWithSubtle(currentPassword);
@@ -50,17 +44,20 @@ async function ensureStore(env: any) {
     globalStore = {
       captcha: new Map<string, CaptchaData>(),
       requestTimestamps: new Map<string, number[]>(),
+
+      admin: {
+        username: currentUsername,
+        passwordHash: currentHashedPassword
+      }
     };
-  }
-
-  // 检查并更新持久化数据
-  const storedUsername = await storage.get('admin:username');
-  const storedPasswordHash = await storage.get('admin:passwordHash');
-
-  // 如果环境变量更新了，或者存储中还没有数据，则更新存储
-  if (storedUsername !== currentUsername || storedPasswordHash !== currentHashedPassword) {
-    await storage.put('admin:username', currentUsername);
-    await storage.put('admin:passwordHash', currentHashedPassword);
+  } else {
+    // 如果环境变量更新了，更新内存中的 admin 数据
+    if (globalStore.admin.username !== currentUsername || globalStore.admin.passwordHash !== currentHashedPassword) {
+      globalStore.admin = {
+        username: currentUsername,
+        passwordHash: currentHashedPassword
+      };
+    }
   }
 }
 
@@ -105,29 +102,29 @@ function generateCaptcha(): string {
   return captcha;
 }
 
-export async function isAuthenticated(request: Request, env: any): Promise<boolean> {
+export async function isAuthenticated(request: Request, JWT_SECRET: string): Promise<boolean> {
   const cookie = request.headers.get("Cookie") || "";
   const token = cookie.split(";").find(c => c.trim().startsWith("token="))?.split("=")[1];
-  
   if (!token) return false;
   
-  const jwtSecret = env.JWT_SECRET || 'k1PtweQ69UBRzdOIla2n6AJf9ovp3TvFBhvbeUIOxSmCEPOvQwfRGBuzeaHwKfjNIJb7JtaEruvYkjPUp5eZpZ';
+  const jwtSecret =JWT_SECRET  || 'k1PtweQ69UBRzdOIla2n6AJf9ovp3TvFBhvbeUIOxSmCEPOvQwfRGBuzeaHwKfjNIJb7JtaEruvYkjPUp5eZpZ';
   
   try {
-    await verify(token, jwtSecret, 'HS256');
-    
-    const storage = new KVStorage(env);
+    const payload = await verify(token, jwtSecret, 'HS256');
+   
+    // 验证 IP 是否匹配
     const ip = request.headers.get("CF-Connecting-IP") || "";
     const hashedIP = await hashWithSubtle(ip);
-    const session = await storage.get("auth_session");
+
     
-    return session && session.token === token && session.hashedIP === hashedIP;
+    return payload && payload.sub === 'admin' && payload.ip === hashedIP;
   } catch (e) {
+    console.log('e', e);
     return false;
   }
 }
 
-export function getLoginHtml(): string {
+export function getLoginHtml(captchaSalt: string): string {
   return `
 <!DOCTYPE html>
 <html lang="zh-CN" data-bs-theme="dark">
@@ -430,22 +427,23 @@ export function getLoginHtml(): string {
   `;
 }
 auth.get('/login', (c: Context) => {
-  return cacheResponse(c, c.req.url, async () => c.html(getLoginHtml()), 300);
+  const captchaSalt = c.env.CAPTCHA_SALT || '';
+  return c.html(getLoginHtml(captchaSalt));
 });
 auth.get('/captcha', captchaLimiter, async (c: Context) => {
   await ensureStore(c.env);
-  const storage = new KVStorage(c.env);
   const captchaSalt = c.env.CAPTCHA_SALT || '';
 
   const captchaText = generateCaptcha();
   const captchaId = 'latest';
   const saltedHashedCaptcha = await hashWithSubtle((captchaText + captchaSalt).toLowerCase());
 
-  // 获取当前存储的密码哈希，并结合 saltedHashedCaptcha 生成预期的登录哈希
-  const storedPasswordHash = await storage.get('admin:passwordHash');
+  // 使用内存中的 admin 数据
+  const storedPasswordHash = globalStore!.admin.passwordHash;
   const expectedLoginHash = await hashWithSubtle(storedPasswordHash + saltedHashedCaptcha);
 
-  await storage.put('captcha:latest', {
+  // 存入内存
+  globalStore!.captcha.set(captchaId, {
     hashedCaptcha: saltedHashedCaptcha,
     expectedLoginHash,
     text: captchaText,
@@ -458,9 +456,6 @@ auth.get('/captcha', captchaLimiter, async (c: Context) => {
 auth.post('/login', globalLimiter, async (c: Context) => {
   try {
     await ensureStore(c.env);
-    const storage = new KVStorage(c.env);
-
-    const jwtSecret = c.env.JWT_SECRET || 'k1PtweQ69UBRzdOIla2n6AJf9ovp3TvFBhvbeUIOxSmCEPOvQwfRGBuzeaHwKfjNIJb7JtaEruvYkjPUp5eZpZ';
 
     const body: any = await c.req.parseBody();
     let { username, hashedPassword, hashedCaptcha, captchaId } = body;
@@ -469,37 +464,41 @@ auth.post('/login', globalLimiter, async (c: Context) => {
       return c.json({ error: '用户名、密码和验证码不能为空' }, 429);
     }
 
-    const storedCaptcha = (await storage.get('captcha:latest')) as any;
+    const storedCaptcha = globalStore!.captcha.get(captchaId);
 
     if (!storedCaptcha || storedCaptcha.expires <= Date.now()) {
-      await storage.delete('captcha:latest');
+      globalStore!.captcha.delete(captchaId);
       return c.json({ error: '验证码已过期' }, 429);
     }
 
     if (storedCaptcha.hashedCaptcha !== hashedCaptcha) {
-      await storage.delete('captcha:latest');
+      globalStore!.captcha.delete(captchaId);
       return c.json({ error: '验证码错误' }, 429);
     }
 
-    const storedUsername = await storage.get('admin:username');
+    const storedUsername = globalStore!.admin.username;
     
     // 验证用户名和结合了验证码盐值的密码哈希
     if (username !== storedUsername || hashedPassword !== storedCaptcha.expectedLoginHash) {
       return c.json({ error: '无效的用户名或密码' }, 429);
     }
 
-    const payload = {
-      sub: 'admin',
-      exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60,
-    };
-    const token = await sign(payload, jwtSecret);
+    // 登录成功后，清理验证码
+    globalStore!.captcha.delete(captchaId);
 
     // 获取并加密用户 IP
     const ip = c.req.header('CF-Connecting-IP') || '';
     const hashedIP = await hashWithSubtle(ip);
-    
-    // 将 token 和加密后的 IP 存入 KV，实现单一登录
-    await storage.put('auth_session', { token, hashedIP });
+
+    const jwtSecret = c.env.JWT_SECRET || 'k1PtweQ69UBRzdOIla2n6AJf9ovp3TvFBhvbeUIOxSmCEPOvQwfRGBuzeaHwKfjNIJb7JtaEruvYkjPUp5eZpZ';
+   
+
+    const payload = {
+      sub: 'admin',
+      ip: hashedIP, // 将加密后的 IP 存入 payload
+      exp: Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60,
+    };
+    const token = await sign(payload, jwtSecret);
 
     setCookie(c, 'token', token, {
       path: '/',
@@ -510,20 +509,11 @@ auth.post('/login', globalLimiter, async (c: Context) => {
 
     return c.json({ token });
   } catch (err) {
-    return c.json({ error: '服务器错误' }, 500);
+    return c.json({ error: '服务器错误' + err }, 500);
   }
 });
 
 auth.get(UNAUTH_ROUTES.LOGOUT, async (c: Context) => {
-  const cookie = c.req.header("Cookie") || "";
-  const token = cookie.split(";").find(c => c.trim().startsWith("token="))?.split("=")[1];
-  if (token) {
-    const storage = new KVStorage(c.env);
-    const session = await storage.get('auth_session');
-    if (session && session.token === token) {
-      await storage.delete('auth_session');
-    }
-  }
   setCookie(c, 'token', '', {
     path: '/',
     maxAge: 0,
