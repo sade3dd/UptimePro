@@ -20,7 +20,8 @@ export default {
 
     // 排除内部触发和公开路由
     if (url.pathname !== "/internal/trigger") {
-      const authenticated = await isAuthenticated(request, env);
+      const jwtSecret = env.JWT_SECRET || 'k1PtweQ69UBRzdOIla2n6AJf9ovp3TvFBhvbeUIOxSmCEPOvQwfRGBuzeaHwKfjNIJb7JtaEruvYkjPUp5eZpZ';
+      const authenticated = await isAuthenticated(request, jwtSecret);
       if (!authenticated) {
         return Response.redirect(new URL("/login", request.url).toString(), 302);
       }
@@ -33,8 +34,7 @@ export default {
       return await obj.fetch(request);
     }
 
-    return new Response(`
-<!DOCTYPE html>
+    return new Response(`<!DOCTYPE html>
 <html lang="zh" data-bs-theme="dark">
 <head>
     <meta charset="UTF-8">
@@ -45,7 +45,7 @@ export default {
         body { 
             font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
             background-color: #000; 
-            color: #e4e4e7;
+            color: #059669;
         }
         .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
         .glass { 
@@ -73,7 +73,7 @@ export default {
             display: inline-block;
         }
         .status-up { background-color: #10b981; box-shadow: 0 0 15px rgba(16, 185, 129, 0.5); }
-        .status-down { background-color: #ef4444; box-shadow: 0 0 15px rgba(239, 68, 68, 0.5); }
+        .status-down { background-color: #8a1616; box-shadow: 0 0 15px rgba(239, 68, 68, 0.5); }
         
         .uptime-bar { display: flex; gap: 2px; height: 30px; }
         .uptime-dot { 
@@ -86,8 +86,8 @@ export default {
         .sparkline { stroke: #10b981; stroke-width: 2; fill: rgba(16, 185, 129, 0.1); }
         
         .btn-emerald {
-            background-color: #10b981;
-            color: white;
+            background-color: #0ea170;
+            color: #e3e6d6;
             border: none;
             font-weight: 800;
             padding: 0.8rem 1.5rem;
@@ -95,7 +95,7 @@ export default {
             text-transform: uppercase;
             letter-spacing: 0.05em;
         }
-        .btn-emerald:hover { background-color: #059669; color: white; }
+        .btn-emerald:hover { background-color: #059669; color: #e3e6d6; }
         
         .modal-content {
             background-color: #09090b;
@@ -105,12 +105,12 @@ export default {
         .form-control, .form-select {
             background-color: #111 !important;
             border: 1px solid rgba(255, 255, 255, 0.1) !important;
-            color: #fff !important;
+            color: #059669 !important;
             border-radius: 1rem;
             padding: 0.75rem 1rem;
         }
         .form-control:focus, .form-select:focus {
-            border-color: #10b981 !important;
+            border-color: #059669 !important;
             box-shadow: 0 0 0 0.25rem rgba(16, 185, 129, 0.25);
         }
         
@@ -123,20 +123,20 @@ export default {
         .brand span { color: #10b981; }
         #engineStatusText { color: #60a5fa !important; }
         .text-secondary { color: #94a3b8 !important; }
-        .card-stat .h1 { color: #ffffff; }
+        .card-stat .h1 { color: #059669; }
         #upCount { color: #34d399 !important; }
-        #downCount { color: #f87171 !important; }
+        #downCount { color: #c94545 !important; }
         #operationalLabel { color: #10b981 !important; }
-        #downLabel { color: #ef4444 !important; }
+        #downLabel { color: #b63030 !important; }
         #uptimeLabel { color: #60a5fa !important; }
         .form-label { color: #c084fc !important; }
-        .monitor-card h4 { color: #ffffff; }
+        .monitor-card h4 { color: #27da17; }
         .monitor-card .latency-label { color: #a1a1aa !important; }
         .monitor-card .latency-value { color: #fbbf24 !important; }
         .monitor-card .checks-label { color: #c084fc !important; }
         .monitor-card .stable-label { color: #34d399 !important; }
         .monitor-card .check-label { color: #71717a !important; }
-        .monitor-card .check-value { color: #e2e8f0 !important; }
+        .monitor-card .check-value { color: #8fdda0 !important; }
         .hover-emerald:hover { color: #10b981 !important; }
     </style>
 </head>
@@ -281,6 +281,7 @@ export default {
                 down: 'Down',
                 avg_uptime: 'Avg Uptime',
                 latency: 'Latest Latency',
+                status_code: 'Status Code',
                 last_checks: 'Last 60 Checks',
                 stable: 'Stable Connection',
                 last_check: 'Last Check',
@@ -324,6 +325,7 @@ export default {
                 down: '检测到故障',
                 avg_uptime: '平均可用率',
                 latency: '当前延迟',
+                status_code: '状态码',
                 last_checks: '最近 60 次检查',
                 stable: '连接稳定',
                 last_check: '上次检查',
@@ -420,26 +422,29 @@ export default {
             },
 
             async fetchMonitors() {
-                const res = await fetch('/api/monitors');
-                if (res.status === 401) {
-                    location.reload();
-                    return;
-                }
-                this.monitors = await res.json();
-                
-                document.getElementById('upCount').textContent = this.monitors.filter(m => m.status === 'up').length;
-                document.getElementById('downCount').textContent = this.monitors.filter(m => m.status === 'down').length;
-                
-                for (const m of this.monitors) {
-                    await this.fetchLogs(m.id);
-                }
-                this.renderMonitors();
-            },
+                try {
+                    const res = await fetch('/api/monitors');
+                    if (res.status === 401) {
+                        location.reload();
+                        return;
+                    }
+                    this.monitors = await res.json();
+                    
+                    // 优化：直接从 monitors 数据中提取日志，减少请求次数
+                    this.monitors.forEach(m => {
+                        if (m.logs) {
+                            this.logs[m.id] = m.logs;
+                        }
+                    });
 
-            async fetchLogs(id) {
-                const res = await fetch('/api/logs/' + id);
-                const data = await res.json();
-                this.logs[id] = data.reverse();
+                    document.getElementById('upCount').textContent = this.monitors.filter(m => m.status === 'up').length;
+                    document.getElementById('downCount').textContent = this.monitors.filter(m => m.status === 'down').length;
+                    
+                    // 渲染列表
+                    this.renderMonitors();
+                } catch (e) {
+                    console.error("Fetch monitors failed", e);
+                }
             },
 
             renderMonitors() {
@@ -447,96 +452,115 @@ export default {
                 list.innerHTML = '';
                 
                 this.monitors.forEach(m => {
-                    const monitorLogs = this.logs[m.id] || [];
-                    const latestLatency = monitorLogs.length ? monitorLogs[monitorLogs.length - 1].latency : 0;
-                    
                     const card = document.createElement('div');
                     card.className = 'glass monitor-card';
-                    
-                    let uptimeDots = '';
-                    const displayLogs = monitorLogs.slice(0, 60);
-                    displayLogs.forEach(log => {
-                        const timeStr = new Date(log.timestamp).toLocaleTimeString();
-                        uptimeDots += \`<div class="uptime-dot \${log.success ? 'bg-success' : 'bg-danger'}" style="opacity: \${log.success ? '0.4' : '1'}" title="\${timeStr} | \${log.latency}ms"></div>\`;
-                    });
-                    for (let i = 0; i < Math.max(0, 60 - displayLogs.length); i++) {
-                        uptimeDots += '<div class="uptime-dot bg-secondary opacity-10"></div>';
-                    }
-
-                    const sparklinePath = this.generateSparkline(m.id);
-
-                    card.innerHTML = \`
-                        <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-4 mb-4">
-                            <div class="d-flex align-items-center gap-4" style="min-width: 0; flex: 1;">
-                                <div class="status-dot \${m.status === 'up' ? 'status-up' : 'status-down'}" style="flex-shrink: 0;"></div>
-                                <div style="min-width: 0; flex: 1;">
-                                    <h4 class="fw-black mb-1 tracking-tighter text-truncate" title="\${m.name}">\${m.name}</h4>
-                                    <div class="d-flex align-items-center gap-3" style="min-width: 0;">
-                                        <span class="small mono text-secondary text-truncate" style="max-width: 350px;" title="\${m.url}">\${m.url}</span>
-                                        \${m.type === 'tcp' ? 
-                                            \`<span class="badge bg-white bg-opacity-10 text-warning border border-white border-opacity-10" style="flex-shrink: 0;">TCP</span>\` :
-                                            \`<span class="badge bg-white bg-opacity-10 text-secondary border border-white border-opacity-10" style="flex-shrink: 0;">\${m.method}</span>\`
-                                        }
-                                        \${m.type !== 'tcp' && m.body_type && m.body_type !== 'none' ? \`<span class="badge bg-white bg-opacity-10 text-info border border-white border-opacity-10 ms-1" style="flex-shrink: 0; font-size: 0.6rem;">\${m.body_type.toUpperCase()}</span>\` : ''}
-                                    </div>
-                                </div>
-                            </div>
-                            <div class="d-flex gap-5 text-end align-items-center" style="flex-shrink: 0;">
-                                <div>
-                                    <div class="latency-label text-secondary small fw-bold text-uppercase tracking-wider mb-1">\${this.t('latency')}</div>
-                                    <div class="latency-value h5 fw-black mono mb-0">\${latestLatency}<span class="fs-6 text-secondary ms-1">ms</span></div>
-                                </div>
-                                <div class="d-flex gap-2">
-                                    <button onclick="app.cloneMonitor('\${m.id}')" class="btn btn-link text-secondary p-2 hover-emerald" title="\${this.t('clone_monitor')}">
-                                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width: 24px;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" /></svg>
-                                    </button>
-                                    <button onclick="app.editMonitor('\${m.id}')" class="btn btn-link text-secondary p-2 hover-emerald" title="\${this.t('edit_monitor')}">
-                                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width: 24px;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
-                                    </button>
-                                    <button onclick="app.deleteMonitor('\${m.id}')" class="btn btn-link text-secondary p-2 hover-red">
-                                        <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width: 24px;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                        \${sparklinePath ? \`
-                        <div class="mb-3 h-10 w-100 rounded-3 overflow-hidden" style="background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.1);">
-                            <svg class="w-100 h-100" preserveAspectRatio="none" viewBox="0 0 100 25">
-                                <path d="\${sparklinePath}" class="sparkline" fill="none" vector-effect="non-scaling-stroke" />
-                            </svg>
-                        </div>
-                        \` : ''}
-
-                        <div class="mb-4">
-                            <div class="d-flex justify-content-between small fw-bold text-uppercase tracking-wider mb-2">
-                                <span class="checks-label text-secondary">\${this.t('last_checks')}</span>
-                                <span class="stable-label text-success opacity-75">\${this.t('stable')}</span>
-                            </div>
-                            <div class="uptime-bar">\${uptimeDots}</div>
-                        </div>
-
-                        <div class="d-flex justify-content-between align-items-center pt-4 border-top border-white border-opacity-10">
-                            <div class="d-flex gap-4">
-                                <div>
-                                    <div class="check-label text-secondary" style="font-size: 0.6rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.1em;">\${this.t('last_check')}</div>
-                                    <div class="check-value small fw-bold text-secondary-emphasis">\${this.formatTime(m.last_check)}</div>
-                                </div>
-                                <div>
-                                    <div class="check-label text-secondary" style="font-size: 0.6rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.1em;">\${this.t('next_check')}</div>
-                                    <div class="check-value small fw-bold text-secondary-emphasis">\${this.formatTime(m.next_check)}</div>
-                                </div>
-                            </div>
-                            <div class="text-secondary" style="font-size: 0.6rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.1em;">
-                                \${this.t('interval')}: \${m.interval}s
-                            </div>
-                        </div>
-                    \`;
+                    card.id = \`monitor-card-\${m.id}\`;
+                    card.innerHTML = this.getMonitorCardHtml(m);
                     list.appendChild(card);
                 });
             },
 
+            updateMonitorCard(id) {
+                const card = document.getElementById(\`monitor-card-\${id}\`);
+                if (!card) return;
+                const m = this.monitors.find(m => m.id == id);
+                if (!m) return;
+                card.innerHTML = this.getMonitorCardHtml(m);
+            },
+
+            getMonitorCardHtml(m) {
+                const monitorLogs = this.logs[m.id] || [];
+                const latestLatency = monitorLogs.length ? monitorLogs[monitorLogs.length - 1].latency : 0;
+                const latestStatusCode = monitorLogs.length ? monitorLogs[monitorLogs.length - 1].status_code : 0;
+                
+                
+                let uptimeDots = '';
+                // 后端存储的是正序，前端展示最近 60 条
+                const displayLogs = monitorLogs.slice(-60);
+                displayLogs.forEach(log => {
+                    const timeStr = new Date(log.timestamp).toLocaleTimeString();
+                      uptimeDots += \`<div class="uptime-dot \${log.success ? 'bg-success' : 'bg-danger'}" style="opacity: \${log.success ? '0.4' : '1'}" title="\${timeStr} | \${log.status_code} | \${log.latency}ms"></div>\`;
+          });
+                for (let i = 0; i < Math.max(0, 60 - displayLogs.length); i++) {
+                    uptimeDots += '<div class="uptime-dot bg-secondary opacity-10"></div>';
+                }
+
+                const sparklinePath = this.generateSparkline(m.id);
+
+                return \`
+                    <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-4 mb-4">
+                        <div class="d-flex align-items-center gap-4" style="min-width: 0; flex: 1;">
+                            <div class="status-dot \${m.status === 'up' ? 'status-up' : 'status-down'}" style="flex-shrink: 0;"></div>
+                            <div style="min-width: 0; flex: 1;">
+                                <h4 class="fw-black mb-1 tracking-tighter text-truncate" title="\${m.name}">\${m.name}</h4>
+                                <div class="d-flex align-items-center gap-3" style="min-width: 0;">
+                                    <span class="small mono text-secondary text-truncate" style="max-width: 350px;" title="\${m.url}">\${m.url}</span>
+                                    \${m.type === 'tcp' ? 
+                                        '<span class="badge bg-white bg-opacity-10 text-warning border border-white border-opacity-10" style="flex-shrink: 0;">TCP</span>' :
+                                        '<span class="badge bg-white bg-opacity-10 text-secondary border border-white border-opacity-10" style="flex-shrink: 0;">' + m.method + '</span>'
+                                    }
+                                    \${m.type !== 'tcp' && m.body_type && m.body_type !== 'none' ? '<span class="badge bg-white bg-opacity-10 text-info border border-white border-opacity-10 ms-1" style="flex-shrink: 0; font-size: 0.6rem;">' + m.body_type.toUpperCase() + '</span>' : ''}
+                                </div>
+                            </div>
+                        </div>
+                        <div class="d-flex gap-5 text-end align-items-center" style="flex-shrink: 0;">
+                            <div>
+                                <div class="latency-label text-secondary small fw-bold text-uppercase tracking-wider mb-1">\${this.t('latency')}</div>
+                                <div class="latency-value h5 fw-black mono mb-0">\${latestLatency}<span class="fs-6 text-secondary ms-1">ms</span></div>
+                            </div>
+                             <div>
+                                <div class="status-code-label text-secondary small fw-bold text-uppercase tracking-wider mb-1">\${this.t('status_code')}</div>
+                                <div class="status-code-value h5 fw-black mono mb-0">\${latestStatusCode || '-'}</div>
+                            </div>
+                            <div class="d-flex gap-2">
+                                <button onclick="app.cloneMonitor('\${m.id}')" class="btn btn-link text-secondary p-2 hover-emerald" title="\${this.t('clone_monitor')}">
+                                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width: 24px;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 7v8a2 2 0 002 2h6M8 7V5a2 2 0 012-2h4.586a1 1 0 01.707.293l4.414 4.414a1 1 0 01.293.707V15a2 2 0 01-2 2h-2M8 7H6a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2v-2" /></svg>
+                                </button>
+                                <button onclick="app.editMonitor('\${m.id}')" class="btn btn-link text-secondary p-2 hover-emerald" title="\${this.t('edit_monitor')}">
+                                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width: 24px;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" /></svg>
+                                </button>
+                                <button onclick="app.deleteMonitor('\${m.id}')" class="btn btn-link text-secondary p-2 hover-red">
+                                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width: 24px;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    \${sparklinePath ? \`
+                    <div class="mb-3 h-10 w-100 rounded-3 overflow-hidden" style="background: rgba(16, 185, 129, 0.05); border: 1px solid rgba(16, 185, 129, 0.1);">
+                        <svg class="w-100 h-100" preserveAspectRatio="none" viewBox="0 0 100 25">
+                            <path d="\${sparklinePath}" class="sparkline" fill="none" vector-effect="non-scaling-stroke" />
+                        </svg>
+                    </div>
+                    \` : ''}
+
+                    <div class="mb-4">
+                        <div class="d-flex justify-content-between small fw-bold text-uppercase tracking-wider mb-2">
+                            <span class="checks-label text-secondary">\${this.t('last_checks')}</span>
+                            <span class="stable-label text-success opacity-75">\${this.t('stable')}</span>
+                        </div>
+                        <div class="uptime-bar">\${uptimeDots}</div>
+                    </div>
+
+                    <div class="d-flex justify-content-between align-items-center pt-4 border-top border-white border-opacity-10">
+                        <div class="d-flex gap-4">
+                            <div>
+                                <div class="check-label text-secondary" style="font-size: 0.6rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.1em;">\${this.t('last_check')}</div>
+                                <div class="check-value small fw-bold text-secondary-emphasis">\${this.formatTime(m.last_check)}</div>
+                            </div>
+                            <div>
+                                <div class="check-label text-secondary" style="font-size: 0.6rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.1em;">\${this.t('next_check')}</div>
+                                <div class="check-value small fw-bold text-secondary-emphasis">\${this.formatTime(m.next_check)}</div>
+                            </div>
+                        </div>
+                        <div class="text-secondary" style="font-size: 1.0rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.1em;">
+                            \${this.t('interval')}: \${m.interval}s
+                        </div>
+                    </div>
+                \`;
+            },
+
             generateSparkline(id) {
-                const logs = (this.logs[id] || []).slice(0, 60).reverse();
+                const logs = (this.logs[id] || []).slice(-60);
                 if (logs.length < 2) return '';
                 
                 const maxLatency = Math.max(...logs.map(l => l.latency), 100);
@@ -601,7 +625,7 @@ export default {
                 document.getElementById('m_type').value = m.type || 'http';
                 document.getElementById('m_method').value = m.method;
                 document.getElementById('m_interval').value = m.interval;
-                document.getElementById('m_headers').value = m.headers ? JSON.stringify(JSON.parse(m.headers), null, 2) : '';
+                document.getElementById('m_headers').value = m.headers ? (typeof m.headers === 'string' ? JSON.stringify(JSON.parse(m.headers), null, 2) : JSON.stringify(m.headers, null, 2)) : '';
                 document.getElementById('m_body').value = m.body || '';
                 document.getElementById('m_body_type').value = m.body_type || 'none';
                 document.getElementById('m_notify').checked = m.notify === 1;
@@ -625,7 +649,7 @@ export default {
                 document.getElementById('m_type').value = m.type || 'http';
                 document.getElementById('m_method').value = m.method;
                 document.getElementById('m_interval').value = m.interval;
-                document.getElementById('m_headers').value = m.headers ? JSON.stringify(JSON.parse(m.headers), null, 2) : '';
+                               document.getElementById('m_headers').value = m.headers ? (typeof m.headers === 'string' ? JSON.stringify(JSON.parse(m.headers), null, 2) : JSON.stringify(m.headers, null, 2)) : '';
                 document.getElementById('m_body').value = m.body || '';
                 document.getElementById('m_body_type').value = m.body_type || 'none';
                 document.getElementById('m_notify').checked = m.notify === 1;
