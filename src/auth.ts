@@ -2,7 +2,9 @@ import { Hono } from 'hono';
 import { sign, verify } from 'hono/jwt';
 import type { Context, Next } from 'hono';
 import { getCookie, setCookie } from 'hono/cookie';
-
+import { LOGIN_HTML} from "./ui.js";
+import { cacheResponse } from './utils.js';
+import { compress } from 'hono/compress';
 // 定义无需认证的路由
 export const UNAUTH_ROUTES = {
   CAPTCHA: '/captcha',
@@ -26,13 +28,34 @@ interface UserData {
 let globalStore: {
   captcha: Map<string, CaptchaData>;
   requestTimestamps: Map<string, number[]>;
-  
+
 
   admin: {
     username: string;
     passwordHash: string;
   }
 } | undefined;
+// ===== 输入安全检查工具 =====
+
+function isSafeString(v: any, maxLen = 128): v is string {
+  if (typeof v !== 'string') return false;
+  if (v.length === 0 || v.length > maxLen) return false;
+
+  // 禁止控制字符（0x00 - 0x1F）
+  if (/[\x00-\x1F]/.test(v)) return false;
+
+  return true;
+}
+
+// 用户名：中英文 + 数字 + 下划线 + 横线
+const usernamePattern = /^[\u4e00-\u9fa5A-Za-z0-9_-]{1,32}$/;
+
+// 哈希字段（base64 / hex）
+const hashPattern = /^[A-Za-z0-9+/=]+$/;
+
+// 安全 ID（captchaId）
+const idPattern = /^[A-Za-z0-9_-]{1,64}$/
+
 
 // 初始化全局存储的辅助函数
 async function ensureStore(env: any) {
@@ -63,6 +86,8 @@ async function ensureStore(env: any) {
 
 // 创建 Hono 实例
 const auth = new Hono<{ Bindings: { MONITOR_ENGINE: any; FIXED_USERNAME?: string; FIXED_PASSWORD?: string; JWT_SECRET?: string; CAPTCHA_SALT?: string } }>();
+// 全局安全头中间件
+
 
 // 自定义速率限制器中间件
 const createRateLimiter = (windowMs: number, limit: number, key: string) => {
@@ -82,7 +107,7 @@ const createRateLimiter = (windowMs: number, limit: number, key: string) => {
   };
 };
 
-const globalLimiter = createRateLimiter(3 * 1000,1, 'global');
+const globalLimiter = createRateLimiter(3 * 1000, 1, 'global');
 const captchaLimiter = createRateLimiter(5 * 1000, 1, 'captcha');
 
 async function hashWithSubtle(input: string): Promise<string> {
@@ -106,334 +131,37 @@ export async function isAuthenticated(request: Request, JWT_SECRET: string): Pro
   const cookie = request.headers.get("Cookie") || "";
   const token = cookie.split(";").find(c => c.trim().startsWith("token="))?.split("=")[1];
   if (!token) return false;
-  
-  const jwtSecret =JWT_SECRET  || 'k1PtweQ69UBRzdOIla2n6AJf9ovp3TvFBhvbeUIOxSmCEPOvQwfRGBuzeaHwKfjNIJb7JtaEruvYkjPUp5eZpZ';
-  
+
+  const jwtSecret = JWT_SECRET || 'k1PtweQ69UBRzdOIla2n6AJf9ovp3TvFBhvbeUIOxSmCEPOvQwfRGBuzeaHwKfjNIJb7JtaEruvYkjPUp5eZpZ';
+
   try {
     const payload = await verify(token, jwtSecret, 'HS256');
-   
+
     // 验证 IP 是否匹配
     const ip = request.headers.get("CF-Connecting-IP") || "";
     const hashedIP = await hashWithSubtle(ip);
 
-    
+
     return payload && payload.sub === 'admin' && payload.ip === hashedIP;
   } catch (e) {
-    console.log('e', e);
     return false;
   }
 }
 
-export function getLoginHtml(captchaSalt: string): string {
-  return `
-<!DOCTYPE html>
-<html lang="zh-CN" data-bs-theme="dark">
-<head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Uptime Pro | Login</title>
-  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-  <script src="https://cdn.jsdelivr.net/npm/js-sha256@0.9.0/src/sha256.min.js"></script>
-  <style>
-    body { 
-      font-family: system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", "Liberation Sans", sans-serif, "Apple Color Emoji", "Segoe UI Emoji", "Segoe UI Symbol", "Noto Color Emoji";
-      background-color: #000; 
-      min-height: 100vh;
-      display: flex;
-      align-items: center;
-      justify-content: center;
-    }
-    .login-card {
-      background: rgba(255, 255, 255, 0.02);
-      backdrop-filter: blur(20px);
-      border: 1px solid rgba(255, 255, 255, 0.05);
-      border-radius: 2rem;
-      padding: 3rem;
-      width: 100%;
-      max-width: 400px;
-      box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.5);
-      position: relative;
-    }
-    .lang-toggle {
-      position: absolute;
-      top: 1.5rem;
-      right: 1.5rem;
-    }
-    .form-control {
-      background-color: #09090b !important;
-      border: 1px solid rgba(255, 255, 255, 0.1) !important;
-      color: #fff !important;
-      border-radius: 1rem;
-      padding: 0.8rem 1.2rem;
-    }
-    .form-control:focus {
-      border-color: #10b981 !important;
-      box-shadow: 0 0 0 0.25rem rgba(16, 185, 129, 0.25);
-    }
-    .btn-primary {
-      background-color: #10b981;
-      border: none;
-      border-radius: 1rem;
-      padding: 0.8rem;
-      font-weight: 800;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-    }
-    .btn-primary:hover {
-      background-color: #059669;
-    }
-    canvas {
-      border-radius: 1rem;
-      cursor: pointer;
-      background: #111;
-      width: 100%;
-      height: 50px;
-    }
-    .brand {
-      font-weight: 900;
-      letter-spacing: -0.05em;
-      font-size: 2.5rem;
-      color: #f8fafc;
-    }
-    .brand span {
-      color: #10b981;
-    }
-    .subtitle {
-      font-size: 0.7rem;
-      font-weight: 800;
-      letter-spacing: 0.3em;
-      color: #fbbf24;
-      margin-bottom: 2.5rem;
-    }
-    .form-label {
-      color: #c084fc !important;
-    }
-    .btn-primary {
-      background-color: #10b981;
-      border: none;
-      border-radius: 1rem;
-      padding: 0.8rem;
-      font-weight: 800;
-      text-transform: uppercase;
-      letter-spacing: 0.1em;
-      color: #ffffff;
-    }
-  </style>
-</head>
-<body>
-  <div class="login-card text-center">
-    <div class="lang-toggle">
-      <button onclick="toggleLang()" class="btn btn-link text-secondary text-decoration-none small fw-bold text-uppercase tracking-wider p-0" id="langBtn">中文</button>
-    </div>
-    <div class="brand mb-1">UPTIME<span>PRO</span></div>
-    <div class="subtitle" id="subtitle">ADMIN ACCESS</div>
-    
-    <div id="errorAlert" class="alert alert-danger d-none mb-4 py-2 small" role="alert"></div>
 
-    <form id="loginForm">
-      <div class="mb-3 text-start">
-        <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1" id="labelUser">Username</label>
-        <input type="text" id="username" class="form-control" required autocomplete="username">
-      </div>
-      <div class="mb-3 text-start">
-        <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1" id="labelPass">Password</label>
-        <input type="password" id="password" class="form-control" required autocomplete="current-password">
-      </div>
-      <div class="mb-4 text-start">
-        <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1" id="labelCaptcha">Captcha</label>
-        <div class="row g-2">
-          <div class="col-7">
-            <input type="text" id="captcha" class="form-control text-center text-uppercase" required placeholder="CODE">
-          </div>
-          <div class="col-5">
-            <canvas id="captchaCanvas" onclick="refreshCaptcha()"></canvas>
-          </div>
-        </div>
-      </div>
-      <button type="submit" class="btn btn-primary w-100 shadow-sm" id="loginBtn">
-        Unlock Dashboard
-      </button>
-    </form>
-  </div>
-
-  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-  <script>
-    let captchaId = '';
-    let currentLang = 'cn';
-
-    const i18n = {
-      en: {
-        subtitle: 'ADMIN ACCESS',
-        labelUser: 'Username',
-        labelPass: 'Password',
-        labelCaptcha: 'Captcha',
-        loginBtn: 'Unlock Dashboard',
-        langBtn: '中文',
-        loginFailed: 'Login Failed',
-        networkError: 'Network Error',
-        captchaExpired: 'Captcha Expired',
-        captchaError: 'Captcha Error',
-        fetchCaptchaFailed: 'Failed to fetch captcha'
-      },
-      cn: {
-        subtitle: '管理员访问',
-        labelUser: '用户名',
-        labelPass: '密码',
-        labelCaptcha: '验证码',
-        loginBtn: '解锁控制面板',
-        langBtn: 'ENGLISH',
-        loginFailed: '登录失败',
-        networkError: '网络错误',
-        captchaExpired: '验证码已过期',
-        captchaError: '验证码错误',
-        fetchCaptchaFailed: '获取验证码失败'
-      }
-    };
-
-    function t(key) {
-      return i18n[currentLang][key] || key;
-    }
-
-    function updateUI() {
-      document.getElementById('subtitle').textContent = t('subtitle');
-      document.getElementById('labelUser').textContent = t('labelUser');
-      document.getElementById('labelPass').textContent = t('labelPass');
-      document.getElementById('labelCaptcha').textContent = t('labelCaptcha');
-      document.getElementById('loginBtn').textContent = t('loginBtn');
-      document.getElementById('langBtn').textContent = t('langBtn');
-    }
-
-    function toggleLang() {
-      currentLang = currentLang === 'en' ? 'cn' : 'en';
-      localStorage.setItem('lang', currentLang);
-      document.cookie = "lang=" + currentLang + "; path=/; max-age=31536000";
-      updateUI();
-    }
-
-    function drawCaptcha(text) {
-      const canvas = document.getElementById('captchaCanvas');
-      const ctx = canvas.getContext('2d');
-      // 调整 canvas 实际像素以匹配显示大小
-      canvas.width = canvas.offsetWidth;
-      canvas.height = canvas.offsetHeight;
-      
-      ctx.clearRect(0, 0, canvas.width, canvas.height);
-      ctx.fillStyle = '#111';
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-      ctx.font = 'bold 20px Arial';
-      ctx.textAlign = 'center';
-      ctx.textBaseline = 'middle';
-      
-      for (let i = 0; i < text.length; i++) {
-        const r = Math.floor(Math.random() * 100 + 155);
-        const g = Math.floor(Math.random() * 100 + 155);
-        const b = Math.floor(Math.random() * 100 + 155);
-        ctx.fillStyle = \`rgb(\${r},\${g},\${b})\`;
-        ctx.save();
-        const x = (canvas.width / (text.length + 1)) * (i + 1);
-        const y = canvas.height / 2 + (Math.random() - 0.5) * 10;
-        ctx.translate(x, y);
-        ctx.rotate((Math.random() - 0.5) * 0.4);
-        ctx.fillText(text[i], 0, 0);
-        ctx.restore();
-      }
-      
-      for(let i=0; i<30; i++) {
-        ctx.fillStyle = \`rgba(255,255,255,0.1)\`;
-        ctx.beginPath();
-        ctx.arc(Math.random()*canvas.width, Math.random()*canvas.height, 1, 0, Math.PI*2);
-        ctx.fill();
-      }
-    }
-
-    async function refreshCaptcha() {
-      try {
-        const errorAlert = document.getElementById('errorAlert');
-        errorAlert.classList.add('d-none');
-        const res = await fetch('/captcha');
-        const data = await res.json();
-        if (res.ok) {
-          captchaId = data.captchaId;
-          drawCaptcha(data.captchaText);
-        } else {
-          errorAlert.textContent = data.error || t('fetchCaptchaFailed');
-          errorAlert.classList.remove('d-none');
-        }
-      } catch (e) {
-        console.error('Failed to fetch captcha');
-      }
-    }
-
-    document.addEventListener('DOMContentLoaded', () => {
-      updateUI();
-      refreshCaptcha();
-    });
-
-    document.getElementById('loginForm').onsubmit = async (e) => {
-      e.preventDefault();
-      const errorAlert = document.getElementById('errorAlert');
-      const loginBtn = document.getElementById('loginBtn');
-      errorAlert.classList.add('d-none');
-      
-      const username = document.getElementById('username').value.trim();
-      const password = document.getElementById('password').value;
-      const captcha = document.getElementById('captcha').value.trim().toLowerCase();
-      
-      if (!captchaId) {
-        errorAlert.textContent = t('captchaError');
-        errorAlert.classList.remove('d-none');
-        return;
-      }
-
-      loginBtn.disabled = true;
-      loginBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2"></span>' + t('loginBtn');
-
-      try {
-        const passwordHash = sha256(password);
-        const hashedCaptcha = sha256(captcha);
-        // 使用 hashedCaptcha 作为盐值再次加密
-        const hashedPassword = sha256(passwordHash + hashedCaptcha);
-
-        const res = await fetch('/login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-          body: new URLSearchParams({
-            username,
-            hashedPassword,
-            hashedCaptcha,
-            captchaId
-          })
-        });
-        const data = await res.json();
-        if (res.ok && data.token){
-           window.location.replace('/');
-        } else {
-          refreshCaptcha();
-          errorAlert.textContent = data.error || t('loginFailed');
-          errorAlert.classList.remove('d-none');
-          loginBtn.disabled = false;
-          loginBtn.textContent = t('loginBtn');
-        }
-      } catch (err) {
-        errorAlert.textContent = t('networkError');
-        errorAlert.classList.remove('d-none');
-        loginBtn.disabled = false;
-        loginBtn.textContent = t('loginBtn');
-      }
-    };
-  </script>
-</body>
-</html>
-  `;
-}
 auth.get('/login', (c: Context) => {
-  const captchaSalt = c.env.CAPTCHA_SALT || '';
-  return c.html(getLoginHtml(captchaSalt));
+  c.header("Content-Security-Policy", "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net; object-src 'none';");
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("X-Frame-Options", "DENY");
+  c.header("X-XSS-Protection", "1; mode=block");
+  c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
+
+  return cacheResponse(c, c.req.url, async () => c.html(LOGIN_HTML), 0);
+
 });
 auth.get('/captcha', captchaLimiter, async (c: Context) => {
   await ensureStore(c.env);
   const captchaSalt = c.env.CAPTCHA_SALT || '';
-
   const captchaText = generateCaptcha();
   const captchaId = 'latest';
   const saltedHashedCaptcha = await hashWithSubtle((captchaText + captchaSalt).toLowerCase());
@@ -449,7 +177,11 @@ auth.get('/captcha', captchaLimiter, async (c: Context) => {
     text: captchaText,
     expires: Date.now() + 5 * 60 * 1000,
   });
-
+  c.header("Content-Security-Policy", "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net; object-src 'none';");
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("X-Frame-Options", "DENY");
+  c.header("X-XSS-Protection", "1; mode=block");
+  c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   return c.json({ captchaId, captchaText });
 });
 
@@ -457,15 +189,37 @@ auth.post('/login', globalLimiter, async (c: Context) => {
   try {
     await ensureStore(c.env);
 
+    // 限制 Body 大小（防止大包攻击）
+    const contentLength = Number(c.req.header('Content-Length') || 0);
+    if (contentLength > 10 * 1024) {
+      return c.json({ error: '请求体过大' }, 429);
+    }
+
     const body: any = await c.req.parseBody();
     let { username, hashedPassword, hashedCaptcha, captchaId } = body;
+    // ===== 输入安全检查 =====
+
+    if (!isSafeString(username, 128) || !usernamePattern.test(username)) {
+      return c.json({ error: '非法用户名' }, 429);
+    }
+
+    if (!isSafeString(hashedPassword, 128) || !hashPattern.test(hashedPassword)) {
+      return c.json({ error: '非法密码格式' }, 429);
+    }
+
+    if (!isSafeString(hashedCaptcha, 128) || !hashPattern.test(hashedCaptcha)) {
+      return c.json({ error: '非法验证码格式' }, 429);
+    }
+
+    if (!isSafeString(captchaId, 64) || !idPattern.test(captchaId)) {
+      return c.json({ error: '非法验证码ID' }, 429);
+    }
 
     if (!username || !hashedPassword || !hashedCaptcha || !captchaId) {
       return c.json({ error: '用户名、密码和验证码不能为空' }, 429);
     }
 
     const storedCaptcha = globalStore!.captcha.get(captchaId);
-
     if (!storedCaptcha || storedCaptcha.expires <= Date.now()) {
       globalStore!.captcha.delete(captchaId);
       return c.json({ error: '验证码已过期' }, 429);
@@ -477,7 +231,7 @@ auth.post('/login', globalLimiter, async (c: Context) => {
     }
 
     const storedUsername = globalStore!.admin.username;
-    
+
     // 验证用户名和结合了验证码盐值的密码哈希
     if (username !== storedUsername || hashedPassword !== storedCaptcha.expectedLoginHash) {
       return c.json({ error: '无效的用户名或密码' }, 429);
@@ -491,7 +245,7 @@ auth.post('/login', globalLimiter, async (c: Context) => {
     const hashedIP = await hashWithSubtle(ip);
 
     const jwtSecret = c.env.JWT_SECRET || 'k1PtweQ69UBRzdOIla2n6AJf9ovp3TvFBhvbeUIOxSmCEPOvQwfRGBuzeaHwKfjNIJb7JtaEruvYkjPUp5eZpZ';
-   
+
 
     const payload = {
       sub: 'admin',
@@ -503,10 +257,15 @@ auth.post('/login', globalLimiter, async (c: Context) => {
     setCookie(c, 'token', token, {
       path: '/',
       httpOnly: true,
+      secure: true,
       sameSite: 'Strict',
       maxAge: 7 * 24 * 60 * 60,
     });
-
+    c.header("Content-Security-Policy", "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net; object-src 'none';");
+    c.header("X-Content-Type-Options", "nosniff");
+    c.header("X-Frame-Options", "DENY");
+    c.header("X-XSS-Protection", "1; mode=block");
+    c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
     return c.json({ token });
   } catch (err) {
     return c.json({ error: '服务器错误' + err }, 500);
@@ -518,6 +277,11 @@ auth.get(UNAUTH_ROUTES.LOGOUT, async (c: Context) => {
     path: '/',
     maxAge: 0,
   });
+  c.header("Content-Security-Policy", "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net; object-src 'none';");
+  c.header("X-Content-Type-Options", "nosniff");
+  c.header("X-Frame-Options", "DENY");
+  c.header("X-XSS-Protection", "1; mode=block");
+  c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
   return c.redirect('/login');
 });
 
