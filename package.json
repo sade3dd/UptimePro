@@ -6,7 +6,7 @@
 	"scripts": {
 		"predeploy": "node scripts/generate-secrets.js",
 		"build": "wrangler build",
-		"deploy": "wrangler deploy",
+		"deploy": "wrangler deploy --quiet",
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
 		"cf-typegen": "wrangler types"
