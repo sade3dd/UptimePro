@@ -28,7 +28,7 @@
 	},
 	"vars": { 
 		"CAPTCHA_SALT": "",
-		"FIXED_USERNAME": "user",
+		"FIXED_USERNAME": "admin",
 		"FIXED_PASSWORD": "password",
 		"TG_BOT_TOKEN": "",	
 		"TG_CHAT_ID": ""
