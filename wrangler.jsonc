@@ -33,6 +33,9 @@
 		"TG_BOT_TOKEN": "",	
 		"TG_CHAT_ID": ""
 	},
+	"assets": {
+		"directory": "public"
+	},
     "triggers": {
         "crons": ["*/5 * * * *"]
     }
