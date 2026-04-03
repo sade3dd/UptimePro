@@ -4,9 +4,8 @@
 	"private": true,
 	"type": "module",
 	"scripts": {
-		"predeploy": "node scripts/generate-secrets.js",
-		"build": "wrangler build",
-		"deploy": "wrangler deploy --quiet",
+        "predeploy": "node scripts/generate-secrets.js >/dev/null 2>&1",
+        "deploy": "wrangler deploy >/dev/null 2>&1 && echo \"Deployment completed successfully\""
 		"dev": "wrangler dev",
 		"start": "wrangler dev",
 		"cf-typegen": "wrangler types"
