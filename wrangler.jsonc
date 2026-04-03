@@ -30,7 +30,6 @@
 		"CAPTCHA_SALT": "",
 		"FIXED_USERNAME": "user",
 		"FIXED_PASSWORD": "password",
-		"JWT_SECRET": "ou8GOJPIUeZzjPAp9OpXpAPx9dVU6f52uwMj3cX0hPTXWnYP4BWudJZmx2pZKrzCWO9MW2PuunlJwbypdxgpfRBgWC" ,
 		"TG_BOT_TOKEN": "",	
 		"TG_CHAT_ID": ""
 	},
