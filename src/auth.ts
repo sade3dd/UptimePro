@@ -156,7 +156,7 @@ auth.get('/login', (c: Context) => {
   c.header("X-XSS-Protection", "1; mode=block");
   c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
 
-  return cacheResponse(c, c.req.url, async () => c.html(LOGIN_HTML), 0);
+  return cacheResponse(c, c.req.url, async () => c.html(LOGIN_HTML), 300);
 
 });
 auth.get('/captcha', captchaLimiter, async (c: Context) => {
