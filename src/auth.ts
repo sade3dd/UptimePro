@@ -258,8 +258,7 @@ auth.post('/login', globalLimiter, async (c: Context) => {
       path: '/',
       httpOnly: true,
       secure: true,
-      sameSite: 'Strict',
-      maxAge: 7 * 24 * 60 * 60,
+      sameSite: 'Strict'
     });
     c.header("Content-Security-Policy", "default-src 'self'; script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; img-src 'self' data: blob:; media-src 'self' blob:; connect-src 'self' https://cdn.jsdelivr.net; object-src 'none';");
     c.header("X-Content-Type-Options", "nosniff");
