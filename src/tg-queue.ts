@@ -14,7 +14,7 @@ export class MonitorEngine extends DurableObject {
     this.state = state;
     this.env = env;
   }
-  
+
   // ====================== 初始化表 ======================
   async initTable() {
     this.state.storage.sql.exec(`
@@ -56,6 +56,10 @@ export class MonitorEngine extends DurableObject {
 
 
   async fetch(request: Request) {
+    // 防止外部直接调用 DO
+    if (request.headers.get("X-Intferfnal-Calla") !== this.env.SECURE_KEY) {
+      return new Response("Forbidden", { status: 403 });
+    }
     const url = new URL(request.url);
 
     if (!this.initialized) {
@@ -63,17 +67,33 @@ export class MonitorEngine extends DurableObject {
       this.initialized = true;
     }
 
+    const securityHeaders = {
+      "Content-Security-Policy":
+        "default-src 'self'; " +
+        "script-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; " +
+        "style-src 'self' https://cdn.jsdelivr.net 'unsafe-inline'; " +
+        "img-src 'self' data: blob:; " +
+        "media-src 'self' blob:; " +
+        "connect-src 'self' https://cdn.jsdelivr.net; " +
+        "object-src 'none';",
+      "X-Content-Type-Options": "nosniff",
+      "X-Frame-Options": "DENY",
+      "X-XSS-Protection": "1; mode=block",
+      "Strict-Transport-Security": "max-age=31536000; includeSubDomains",
+    };
     const corsHeaders = {
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
-      "Access-Control-Allow-Headers": "Content-Type",
+      ...securityHeaders,
     };
 
     if (request.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
     // API: 获取监控项
     if (url.pathname === "/api/monitors" && request.method === "GET") {
-      const monitors = Array.from(this.monitors.values());
+      const monitors = Array.from(this.monitors.values()).map(monitor => {
+        // 创建一个干净的副本，不包含 history24h
+        const { history24h, ...cleanMonitor } = monitor;
+        return cleanMonitor;
+      });
       return Response.json(monitors, { headers: corsHeaders });
     }
 
@@ -96,7 +116,10 @@ export class MonitorEngine extends DurableObject {
         last_check: null,
         next_check: new Date().toISOString(),
         created_at: new Date().toISOString(),
-        logs: []
+        logs: [],
+        history24h: [],     // ← 新增：仅后端用于计算24h uptime，**前端不会返回**
+        uptime24h: 100,     // ← 新增
+        uptime: 100         // 兼容前端
       };
       this.monitors.set(id, newMonitor);
       await this.saveToSqlite();
@@ -173,7 +196,7 @@ export class MonitorEngine extends DurableObject {
       }
       return new Response("OK");
     }
- 
+
 
     return new Response("Not Found", { status: 404 });
   }
@@ -303,7 +326,7 @@ export class MonitorEngine extends DurableObject {
         if (!safe["host"]) safe["host"] = host;
 
         // 1. 基础浏览器标识
-        if (!safe["user-agent"]) safe["user-agent"] =  userAgent;
+        if (!safe["user-agent"]) safe["user-agent"] = userAgent;
         if (!safe["accept"]) {
           safe["accept"] =
             "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7";
@@ -447,6 +470,34 @@ export class MonitorEngine extends DurableObject {
         monitorData.logs.shift();
       }
 
+      const now = Date.now();
+      const isSuccess = success ? 1 : 0;
+      // 2. 后端24小时统计：仅保留必要数据（前端不会看到）
+      if (!monitorData.history24h) {
+        monitorData.history24h = [];
+      }
+
+      monitorData.history24h.push({
+        success: isSuccess,
+        timestamp: now
+      });
+
+      // 清理超过24小时的记录
+      const twentyFourHoursAgo = now - 24 * 60 * 60 * 1000;
+      monitorData.history24h = monitorData.history24h.filter(
+        (log: any) => log.timestamp > twentyFourHoursAgo
+      );
+
+      // 计算精确的24小时成功率
+      const total24h = monitorData.history24h.length;
+      const success24h = monitorData.history24h.filter((log: any) => log.success === 1).length;
+
+      monitorData.uptime24h = total24h > 0
+        ? Math.round((success24h / total24h) * 100)
+        : 100;
+
+      monitorData.uptime = monitorData.uptime24h;   // 兼容前端显示
+
       this.monitors.set(monitor.id, monitorData);
     }
 
@@ -531,6 +582,33 @@ export class MonitorEngine extends DurableObject {
         monitorData.logs.shift();
       }
 
+      const now = Date.now();
+      const isSuccess = success ? 1 : 0;
+      // 2. 后端24小时统计：仅保留必要数据（前端不会看到）
+      if (!monitorData.history24h) {
+        monitorData.history24h = [];
+      }
+
+      monitorData.history24h.push({
+        success: isSuccess,
+        timestamp: now
+      });
+
+      // 清理超过24小时的记录
+      const twentyFourHoursAgo = now - 24 * 60 * 60 * 1000;
+      monitorData.history24h = monitorData.history24h.filter(
+        (log: any) => log.timestamp > twentyFourHoursAgo
+      );
+
+      // 计算精确的24小时成功率
+      const total24h = monitorData.history24h.length;
+      const success24h = monitorData.history24h.filter((log: any) => log.success === 1).length;
+
+      monitorData.uptime24h = total24h > 0
+        ? Math.round((success24h / total24h) * 100)
+        : 100;
+
+      monitorData.uptime = monitorData.uptime24h;   // 兼容前端显示
       this.monitors.set(monitor.id, monitorData);
     }
 
