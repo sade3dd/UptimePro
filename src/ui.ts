@@ -12,6 +12,44 @@ export const INDEX_HTML = `
             background-color: #000; 
             color: #059669;
         }
+                /* === 新增加载动画相关样式 === */
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(0, 0, 0, 0.4);
+            backdrop-filter: blur(4px);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            opacity: 0;
+            pointer-events: none;
+            transition: opacity 0.3s ease;
+            border-radius: inherit;
+        }
+        .loading-overlay.active {
+            opacity: 1;
+            pointer-events: all;
+        }
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 3px solid rgba(16, 185, 129, 0.1);
+            border-radius: 50%;
+            border-top-color: #10b981;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin {
+            to { transform: rotate(360deg); }
+        }
+        
+        /* 布局修正 */
+        .monitor-list-container { position: relative; min-height: 200px; }
+        #quickMonitorList { position: relative; min-height: 100px; }
+
         .mono { font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace; }
         .glass { 
             background: rgba(255, 255, 255, 0.02); 
@@ -62,27 +100,61 @@ export const INDEX_HTML = `
         }
         .btn-emerald:hover { background-color: #059669; color: #e3e6d6; }
         
+        .btn-outline-emerald {
+            background-color: transparent;
+            color: #0ea170;
+            border: 2px solid #0ea170;
+        }
+        .btn-outline-emerald:hover {
+            background-color: #0ea170;
+            color: #e3e6d6;
+        }
+        .btn-outline-emerald:disabled {
+            border-color: #222;
+            color: #444;
+            cursor: not-allowed;
+        }
+
+        /* Back to Top Button */
+        #backToTop {
+            position: fixed;
+            bottom: 30px;
+            right: 30px;
+            width: 50px;
+            height: 50px;
+            background: #10b981;
+            color: white;
+            border: none;
+            border-radius: 50%;
+            display: none;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(16, 185, 129, 0.4);
+            z-index: 1000;
+            transition: transform 0.2s ease, background 0.2s ease;
+        }
+        #backToTop:hover {
+            transform: translateY(-5px);
+            background: #059669;
+        }
+        
+        .sidebar-pagination {
+            border-top: 1px solid rgba(255, 255, 255, 0.05);
+            margin-top: auto;
+            padding-top: 1rem;
+        }
+        
         .modal-content {
             background-color: #09090b;
             border: 1px solid rgba(255, 255, 255, 0.1);
             border-radius: 2rem;
         }
-        .form-control, .form-select {
-            background-color: #111 !important;
-            border: 1px solid rgba(255, 255, 255, 0.1) !important;
-            color: #059669 !important;
-            border-radius: 1rem;
-            padding: 0.75rem 1rem;
-        }
-        .form-control:focus, .form-select:focus {
-            border-color: #059669 !important;
-            box-shadow: 0 0 0 0.25rem rgba(16, 185, 129, 0.25);
-        }
-        
         /* 滚动条美化 */
         ::-webkit-scrollbar { width: 6px; }
         ::-webkit-scrollbar-track { background: transparent; }
         ::-webkit-scrollbar-thumb { background: #222; border-radius: 10px; }
+        
         
         .brand { font-weight: 900; letter-spacing: -0.05em; font-size: 2rem; color: #f8fafc; }
         .brand span { color: #10b981; }
@@ -162,12 +234,17 @@ export const INDEX_HTML = `
                 display: none !important;
             }
         }
+        .form-control:focus, .form-select:focus {
+            border-color: #059669 !important;
+            box-shadow: 0 0 0 0.25rem rgba(16, 185, 129, 0.25);
+        }
+        
     </style>
 </head>
 <body>
     <div class="d-flex min-vh-100">
         <!-- Sidebar -->
-        <aside class="sidebar border-end border-white border-opacity-10 p-3 d-none d-lg-block" id="sidebar">
+        <aside class="sidebar border-end border-white border-opacity-10 p-3 d-none d-lg-block d-flex flex-column" id="sidebar">
             <div class="sidebar-resizer" id="sidebarResizer"></div>
             <div class="d-flex justify-content-between align-items-center mb-4 px-2">
                 <h6 class="fw-bold text-white mb-0" id="allMonitorsTitle">所有监控</h6>
@@ -175,14 +252,23 @@ export const INDEX_HTML = `
                     <svg width="16" height="16" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" /></svg>
                 </button>
             </div>
-            <div id="quickMonitorList" class="d-flex flex-column gap-2 scrollbar-thin">
+            <div id="quickMonitorList" class="d-flex flex-column gap-2 scrollbar-thin flex-grow-1 position-relative">
+                <div id="sidebarLoading" class="loading-overlay">
+                    <div class="spinner"></div>
+                </div>
+                <div id="quickMonitorItems" class="d-flex flex-column gap-2">
+                    <!-- JS 动态生成 -->
+                </div>
+            </div>
+            <!-- 左侧边栏分页 -->
+            <div id="sidebarPagination" class="sidebar-pagination">
                 <!-- JS 动态生成 -->
             </div>
         </aside>
 
         <!-- Main Content -->
         <div class="main-content">
-            <div class="container py-5">
+            <div class="container py-5" style="max-width: 1000px;">
         <header class="d-flex justify-content-between align-items-center mb-5">
             <div>
                 <div class="brand">UPTIME<span>PRO</span></div>
@@ -192,6 +278,15 @@ export const INDEX_HTML = `
                 </div>
             </div>
             <div class="d-flex align-items-center gap-3">
+                <div class="d-flex align-items-center gap-2 me-3">
+                    <span class="text-secondary small fw-bold text-uppercase tracking-wider" id="pageSizeLabel">Page Size</span>
+                    <select id="pageSizeSelect" onchange="app.changePageSize(this.value)" class="form-select form-select-sm bg-dark text-white border-white border-opacity-10 rounded-pill px-3" style="width: 80px;">
+                        <option value="10">10</option>
+                        <option value="20" selected>20</option>
+                        <option value="50">50</option>
+                        <option value="100">100</option>
+                    </select>
+                </div>
                 <button onclick="app.testNotify()" class="btn btn-link text-info text-decoration-none small fw-bold text-uppercase tracking-wider p-0 me-3" id="testNotifyBtn">Test Notify</button>
                 <button onclick="app.logout()" class="btn btn-link text-danger text-decoration-none small fw-bold text-uppercase tracking-wider p-0 me-3">Logout</button>
                 <button onclick="app.toggleLang()" class="btn btn-outline-warning rounded-pill px-5 py-3 fw-bold" id="langBtn">ENGLISH</button>
@@ -221,11 +316,24 @@ export const INDEX_HTML = `
             </div>
         </div>
         <!-- 监控列表 -->
-        <div id="monitorList" class="space-y-4">
+        <div id="monitorList" class="monitor-list-container">
+            <div id="mainLoading" class="loading-overlay">
+                <div class="spinner"></div>
+            </div>
+            <div id="monitorItems" class="space-y-4">
+                <!-- 动态加载 -->
+            </div>
+        </div>
+        <!-- 分页控制 -->
+        <div id="pagination" class="d-flex justify-content-center align-items-center gap-3 mt-5 mb-5">
             <!-- 动态加载 -->
         </div>
     </div>
 </div>
+
+    <button id="backToTop" onclick="app.scrollToTop()">
+        <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" /></svg>
+    </button>
 
     <!-- 添加弹窗 -->
     <div class="modal fade" id="addMonitorModal" tabindex="-1" aria-hidden="true">
@@ -358,7 +466,11 @@ export const INDEX_HTML = `
                 tcp_placeholder: 'example.com:22',
                 tcp_hint: 'Enter the target as host:port (e.g., example.com:22 or 1.1.1.1:53)',
                 label_url_tcp: 'Target Host:Port',
-                all_monitors: 'All Monitors'
+                all_monitors: 'All Monitors',
+                prev: 'Previous',
+                next: 'Next',
+                page_info: 'Page {page} of {total}',
+                page_size: 'Page Size'
             },
             cn: {
                 engine_status: '边缘监控引擎',
@@ -403,7 +515,11 @@ export const INDEX_HTML = `
                 tcp_placeholder: 'example.com:22',
                 tcp_hint: '请输入目标地址，格式为 host:port (例如 example.com:22 或 1.1.1.1:53)',
                 label_url_tcp: '目标地址 (Host:Port)',
-                all_monitors: '所有监控'
+                all_monitors: '所有监控',
+                prev: '上一页',
+                next: '下一页',
+                page_info: '第 {page} 页，共 {total} 页',
+                page_size: '每页数量'
             }
         };
 
@@ -411,9 +527,18 @@ export const INDEX_HTML = `
             monitors: [],
             logs: {},
             lang: localStorage.getItem('lang') || 'en',
-            
-            t(key) {
-                return i18n[this.lang][key] || key;
+            // --- 状态持久化优化 ---
+            page: parseInt(localStorage.getItem('currentPage')) || 1,
+            pageSize: parseInt(localStorage.getItem('pageSize')) || 20,
+            lastFetchParams: '', // 用于对比参数是否变化
+            total: 0,
+            totalPages: 0,
+            t(key, params = {}) {
+                let text = i18n[this.lang][key] || key;
+                for (const k in params) {
+                    text = text.replace('{' + k + '}', params[k]);
+                }
+                return text;
             },
 
             updateI18n() {
@@ -448,6 +573,7 @@ export const INDEX_HTML = `
                 document.getElementById('optHttp').textContent = this.t('opt_http');
                 document.getElementById('optTcp').textContent = this.t('opt_tcp');
                 document.getElementById('allMonitorsTitle').textContent = this.t('all_monitors');
+                document.getElementById('pageSizeLabel').textContent = this.t('page_size');
                 
                 const logoutBtns = document.querySelectorAll('button[onclick="app.logout()"]');
                 logoutBtns.forEach(btn => btn.textContent = this.t('logout'));
@@ -458,51 +584,124 @@ export const INDEX_HTML = `
                 localStorage.setItem('lang', this.lang);
                 document.cookie = "lang=" + this.lang + "; path=/; max-age=31536000";
                 this.updateI18n();
-                this.renderMonitors();
             },
 
             logout() {
                 location.href = "/scdfdsferty456ghfhSASkkxjdsiufs8d880d9d9fjjJUUS8-8JJ_SXJK_cs/";
             },
 
-            async fetchMonitors() {
+            changePageSize(size) {
+                this.pageSize = parseInt(size);
+                this.page = 1;
+                localStorage.setItem('pageSize', this.pageSize);
+                localStorage.setItem('currentPage', 1);
+                this.fetchMonitors();
+            },
+
+            scrollToTop() {
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            },
+
+            async fetchMonitors(page = this.page) {
+                const currentParams = \`p=\${page}&s=\${this.pageSize}\`;
+                const isSilent = this.lastFetchParams === currentParams;
+                
+                const mainLoading = document.getElementById('mainLoading');
+                const sidebarLoading = document.getElementById('sidebarLoading');
+                
+                if (!isSilent) {
+                    if (mainLoading) mainLoading.classList.add('active');
+                    if (sidebarLoading) sidebarLoading.classList.add('active');
+                }
+                
                 try {
-                    const res = await fetch('/api/monitors');
+                    this.page = page;
+                    const res = await fetch(\`/api/monitors?page=\${this.page}&pageSize=\${this.pageSize}\`);
                     if (res.status === 401) {
                         location.reload();
                         return;
                     }
-                    this.monitors = await res.json();
-                    
-                    // 优化：直接从 monitors 数据中提取日志，减少请求次数
+                    const data = await res.json();
+                    this.monitors = data.monitors;
+                    this.total = data.total;
+                    this.totalPages = data.totalPages;
+                    this.lastFetchParams = currentParams;
+
                     this.monitors.forEach(m => {
-                        if (m.logs) {
-                            this.logs[m.id] = m.logs;
-                        }
+                        if (m.logs) this.logs[m.id] = m.logs;
                     });
- 
-                    document.getElementById('upCount').textContent = this.monitors.filter(m => m.status === 'up').length;
-                    document.getElementById('downCount').textContent = this.monitors.filter(m => m.status === 'down').length;
+
+                    document.getElementById('upCount').textContent = data.upCount || 0;
+                    document.getElementById('downCount').textContent = data.downCount || 0;
+                    document.getElementById('avgUptime').innerHTML = (data.avgUptime || '---') + '<span class="fs-4 text-secondary">%</span>';
                     
-                    const totalUptime = this.monitors.reduce((acc, m) => acc + (m.uptime || 0), 0);
-                    const avgUptime = this.monitors.length > 0 ? (totalUptime / this.monitors.length).toFixed(1) : '---';
-                    document.getElementById('avgUptime').innerHTML = avgUptime + '<span class="fs-4 text-secondary">%</span>';
-                    
-                    // 渲染列表
                     this.renderQuickMonitors();
                     this.renderMonitors();
+                    this.renderPagination();
                 } catch (e) {
                     console.error("Fetch monitors failed", e);
+                } finally {
+                    if (!isSilent) {
+                        setTimeout(() => {
+                            if (mainLoading) mainLoading.classList.remove('active');
+                            if (sidebarLoading) sidebarLoading.classList.remove('active');
+                        }, 300);
+                    }
+                }
+            },
+            renderPagination() {
+                const container = document.getElementById('pagination');
+                const sidebarContainer = document.getElementById('sidebarPagination');
+                if (!container) return;
+                
+                if (this.totalPages <= 1 && this.page === 1) {
+                    container.innerHTML = '';
+                    if (sidebarContainer) sidebarContainer.innerHTML = '';
+                    return;
+                }
+
+                const prevDisabled = this.page <= 1 ? 'disabled' : '';
+                const nextDisabled = this.page >= this.totalPages ? 'disabled' : '';
+
+                const html = \`
+                    <button onclick="app.fetchMonitors(\${this.page - 1})" class="btn btn-outline-emerald px-4 py-2 rounded-pill fw-bold" \${prevDisabled}>
+                        \${this.t('prev')}
+                    </button>
+                    <span class="text-secondary small fw-bold mono">
+                        \${this.t('page_info', { page: this.page, total: this.totalPages })}
+                    </span>
+                    <button onclick="app.fetchMonitors(\${this.page + 1})" class="btn btn-outline-emerald px-4 py-2 rounded-pill fw-bold" \${nextDisabled}>
+                        \${this.t('next')}
+                    </button>
+                \`;
+                
+                container.innerHTML = html;
+                
+                if (sidebarContainer) {
+                    sidebarContainer.innerHTML = \`
+                        <div class="d-flex justify-content-between align-items-center gap-2 px-2">
+                            <button onclick="app.fetchMonitors(\${this.page - 1})" class="btn btn-link text-secondary p-0" \${prevDisabled}>
+                                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7" /></svg>
+                            </button>
+                            <span class="text-secondary small mono" style="font-size: 0.7rem;">
+                                \${this.page} / \${this.totalPages}
+                            </span>
+                            <button onclick="app.fetchMonitors(\${this.page + 1})" class="btn btn-link text-secondary p-0" \${nextDisabled}>
+                                <svg width="20" height="20" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7" /></svg>
+                            </button>
+                        </div>
+                    \`;
                 }
             },
 
             renderMonitors() {
-                const list = document.getElementById('monitorList');
+                const list = document.getElementById('monitorItems');
+                if (!list) return;
                 list.innerHTML = '';
                 
                 this.monitors.forEach(m => {
                     const card = document.createElement('div');
-                    card.className = 'glass monitor-card';
+                    card.className = 'glass monitor-card border border-white border-opacity-10';
                     card.id = 'monitor-card-' + m.id;
                     card.innerHTML = this.getMonitorCardHtml(m);
                     list.appendChild(card);
@@ -518,17 +717,16 @@ export const INDEX_HTML = `
                 if (uptime < 80) rateColorClass = 'rate-low';
                 else if (uptime < 95) rateColorClass = 'rate-mid';
 
-                // 生成小格子 Uptime Bar (最近 20 次，更密集)
                 let miniBar = '';
                 const recentLogs = monitorLogs.slice(-20);
                 recentLogs.forEach(log => {
-                    miniBar += '<div style="width: 4px; height: 12px; background: ' + (log.success ? '#10b981' : '#ef4444') + '; opacity: ' + (log.success ? '0.8' : '1') + '; border-radius: 1px;"></div>';
+                    miniBar += \`<div style="width: 4px; height: 12px; background: \${log.success ? '#10b981' : '#ef4444'}; opacity: \${log.success ? '0.8' : '1'}; border-radius: 1px;"></div>\`;
                 });
                 for (let i = 0; i < 20 - recentLogs.length; i++) {
                     miniBar += '<div style="width: 4px; height: 12px; background: rgba(255,255,255,0.1); border-radius: 1px;"></div>';
                 }
 
-                return \`<div class="sidebar-item d-flex align-items-center gap-2 p-2 rounded-2 mono" onclick="app.showMonitorDetail('\${m.id}')">\` +
+                return \`<div class="sidebar-item d-flex align-items-center gap-2 p-2 rounded-2 mono" id="sidebar-item-\${m.id}" onclick="app.showMonitorDetail('\${m.id}')">\` +
                         \`<div class="d-flex align-items-center gap-1 px-1" style="background: rgba(0,0,0,0.2); border-radius: 4px; border: 1px solid rgba(255,255,255,0.05);">\` +
                             \`<div class="status-dot \${statusClass}" style="width: 6px; height: 6px; flex-shrink: 0;"></div>\` +
                             \`<span class="\${rateColorClass}" style="font-size: 0.7rem;">\${uptime}%</span>\` +
@@ -541,19 +739,36 @@ export const INDEX_HTML = `
             },
 
             renderQuickMonitors() {
-                const container = document.getElementById('quickMonitorList');
+                const container = document.getElementById('quickMonitorItems');
                 if (!container) return;
                 
                 if (this.monitors.length === 0) {
                     container.innerHTML = \`
                         <div class="text-center py-4 w-100">
-                            <p class="text-secondary small mb-0">\${this.lang === 'en' ? 'No monitors yet. Click "Deploy Monitor" to start.' : '暂无监控项，请点击“部署监控”开始。'}</p>
+                            <p class="text-secondary small mb-0">\${this.lang === 'en' ? 'No monitors yet.' : '暂无监控项'}</p>
                         </div>
                     \`;
                     return;
                 }
 
                 container.innerHTML = this.monitors.map(m => this.getQuickMonitorHtml(m)).join('');
+            },
+
+            showMonitorDetail(id) {
+                document.querySelectorAll('.sidebar-item').forEach(el => el.classList.remove('active'));
+                const sidebarItem = document.getElementById(\`sidebar-item-\${id}\`);
+                if (sidebarItem) sidebarItem.classList.add('active');
+
+                const detailCard = document.getElementById(\`monitor-card-\${id}\`);
+                if (detailCard) {
+                    detailCard.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    detailCard.classList.add('border-primary');
+                    detailCard.style.boxShadow = '0 0 25px rgba(16, 185, 129, 0.2)';
+                    setTimeout(() => {
+                        detailCard.classList.remove('border-primary');
+                        detailCard.style.boxShadow = '';
+                    }, 2000);
+                }
             },
 
             showMonitorDetail(id) {
@@ -816,15 +1031,29 @@ export const INDEX_HTML = `
             },
 
             init() {
+                // 1. 同步 PageSize 设置
+                // 1. 【新增】同步顶部导航的每页数量下拉框
+                // 确保页面一打开，下拉框显示的数字就是用户上次选的数字
+                const pageSizeSelect = document.getElementById('pageSizeSelect');
+                if (pageSizeSelect) {
+                    pageSizeSelect.value = this.pageSize;
+                }
+
+                // 2. 初始加载
                 this.updateI18n();
                 this.renderQuickMonitors();
-                this.fetchMonitors();
+                this.fetchMonitors(); // 始终从 page: 1 开始
+                
+                // 3. 定时刷新
                 setInterval(() => this.fetchMonitors(), 10000);
                 
-                // Sidebar Resizer
+                // 4. 侧边栏调整 (Sidebar Resizer)
                 const sidebar = document.getElementById('sidebar');
                 const resizer = document.getElementById('sidebarResizer');
                 let isResizing = false;
+
+                const savedWidth = localStorage.getItem('sidebarWidth');
+                if (savedWidth) sidebar.style.width = savedWidth + 'px';
 
                 resizer.addEventListener('mousedown', (e) => {
                     isResizing = true;
@@ -834,7 +1063,7 @@ export const INDEX_HTML = `
                 document.addEventListener('mousemove', (e) => {
                     if (!isResizing) return;
                     const newWidth = e.clientX;
-                    if (newWidth > 200 && newWidth < 600) {
+                    if (newWidth > 180 && newWidth < 600) {
                         sidebar.style.width = newWidth + 'px';
                         localStorage.setItem('sidebarWidth', newWidth);
                     }
@@ -845,12 +1074,7 @@ export const INDEX_HTML = `
                     document.body.style.cursor = 'default';
                 });
 
-                // Restore sidebar width
-                const savedWidth = localStorage.getItem('sidebarWidth');
-                if (savedWidth) {
-                    sidebar.style.width = savedWidth + 'px';
-                }
-
+                // 5. Modal 隐藏时的重置逻辑
                 document.getElementById('addMonitorModal').addEventListener('hidden.bs.modal', () => {
                     document.getElementById('addMonitorForm').reset();
                     document.getElementById('m_id').value = '';
@@ -860,6 +1084,7 @@ export const INDEX_HTML = `
                     document.getElementById('m_method').dispatchEvent(event);
                 });
 
+                // 6. TCP / HTTP 类型切换逻辑
                 document.getElementById('m_type').addEventListener('change', (e) => {
                     const isTcp = e.target.value === 'tcp';
                     const methodCol = document.getElementById('m_method').closest('.col-md-4');
@@ -895,6 +1120,7 @@ export const INDEX_HTML = `
                     }
                 });
 
+                // 7. Method 切换显示 Body 逻辑
                 document.getElementById('m_method').addEventListener('change', (e) => {
                     const isTcp = document.getElementById('m_type').value === 'tcp';
                     if (isTcp) return;
@@ -907,6 +1133,7 @@ export const INDEX_HTML = `
                     }
                 });
 
+                // 8. URL 实时校验 (IP 提示)
                 document.getElementById('m_url').addEventListener('input', (e) => {
                     const isTcp = document.getElementById('m_type').value === 'tcp';
                     const hint = document.getElementById('ipHint');
@@ -930,6 +1157,16 @@ export const INDEX_HTML = `
                         }
                     } catch (e) {
                         hint.textContent = '';
+                    }
+                });
+
+                // 9. 回到顶部按钮监听
+                window.addEventListener('scroll', () => {
+                    const btn = document.getElementById('backToTop');
+                    if (window.scrollY > 300) {
+                        btn.style.display = 'flex';
+                    } else {
+                        btn.style.display = 'none';
                     }
                 });
             }
