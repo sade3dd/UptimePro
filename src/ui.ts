@@ -267,7 +267,7 @@ export const INDEX_HTML = `
 
         <!-- Main Content -->
         <div class="main-content">
-            <div class="container py-5" style="max-width: 1000px;">
+            <div class="container py-5">
         <header class="d-flex justify-content-between align-items-center mb-5">
             <div>
                 <div class="brand">UPTIME<span>PRO</span></div>
