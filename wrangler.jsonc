@@ -20,6 +20,10 @@
 			{
 				"class_name": "MonitorEngine",
 				"name": "MONITOR_ENGINE"
+			},
+			{
+				"class_name": "WSSEngine",
+				"name": "WS_ENGINE"
 			}
 		]
 	},
