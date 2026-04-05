@@ -916,7 +916,7 @@
                 }
 
                 const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
-                const wsUrl = `${protocol}//${location.host}/api/ws`;
+                const wsUrl = `${protocol}//${location.host}/ws`;
 
                 console.log("[WS] 正在尝试建立连接...");
                 this.ws = new WebSocket(wsUrl);
