@@ -66,20 +66,27 @@ export class MonitorEngine extends DurableObject {
     const url = new URL(request.url);
     
     // 1. 权限校验（最快路径）
-    if (request.headers.get("X-Intferfnal-Calla") !== this.env.SECURE_KEY) {
+    const secureKey = this.env.SECURE_KEY || "IsC3jy5A1axaCxX3I8mP8fE7sjfHiKGQe1Mi";
+    const internalKey = url.searchParams.get("_internal_key") || request.headers.get("X-Intferfnal-Calla");
+    
+    if (internalKey !== secureKey) {
+      console.warn(`[DO] Forbidden access attempt to ${url.pathname}`);
       return new Response("Forbidden", { status: 403 });
     }
 
+
     // 2. WebSocket 升级逻辑（必须非阻塞）
-    if (request.headers.get("Upgrade") === "websocket") {
+    if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
+      console.log(`[DO] Handling WebSocket upgrade for ${url.pathname}`);
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
 
       // 立即接受连接
       this.state.acceptWebSocket(server, ["monitor-client"]);
 
-     return new Response(null, { status: 101, webSocket: client });
+      return new Response(null, { status: 101, webSocket: client });
     }
+
 
     // 3. API 请求处理（API 需要数据，所以必须等待初始化）
     if (!this.initialized) {
@@ -105,19 +112,6 @@ export class MonitorEngine extends DurableObject {
     };
 
     if (request.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
-
-    // WebSocket Upgrade
-    if (request.headers.get("Upgrade") === "websocket") {
-      const pair = new WebSocketPair();
-      const [client, server] = Object.values(pair);
-
-      // 【优化 2】接受连接并关联标签（方便以后按需分类广播）
-      this.state.acceptWebSocket(server, ["monitor-client"]);
-
-      // 这里的 sessions.add(server) 删掉
-      return new Response(null, { status: 101, webSocket: client });
-    }
-
     // API: 获取监控项 (支持分页)
     if (url.pathname === "/api/monitors" && request.method === "GET") {
       const page = parseInt(url.searchParams.get("page") || "1");
