@@ -759,33 +759,26 @@ export class MonitorEngine extends DurableObject {
 
   // ====================== WebSocket 处理 ======================
   /**
- * 【优化 3】增强版广播函数
- * 自动过滤死链，处理 ReadyState
- */
+   * 【优化 3】增强版广播函数
+   * 在休眠模式下，直接发送即可，系统会自动处理连接状态
+   */
   private broadcast(data: any) {
     const message = JSON.stringify(data);
     const sockets = this.state.getWebSockets("monitor-client");
 
-    let closedCount = 0;
+    if (sockets.length > 0) {
+      console.log(`[WSS] Broadcasting to ${sockets.length} clients.`);
+    }
+
     sockets.forEach(ws => {
       try {
-        // 只对处于 OPEN 状态的连接发送
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(message);
-        } else if (ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) {
-          ws.close(); // 确保彻底清理
-          closedCount++;
-        }
+        // 💡 在 Hibernation 模式下，直接 send，不要判断 readyState
+        ws.send(message);
       } catch (e) {
-        console.error("[WSS] Broadcast error for a socket, closing it.");
-        ws.close(1011, "Broadcast failed");
-        closedCount++;
+        console.error("[WSS] Broadcast failed for a socket, closing it.");
+        try { ws.close(1011, "Broadcast failed"); } catch(closeError) {}
       }
     });
-
-    if (closedCount > 0) {
-      console.log(`[WSS] Cleaned up ${closedCount} dead/closing connections during broadcast.`);
-    }
   }
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
 
