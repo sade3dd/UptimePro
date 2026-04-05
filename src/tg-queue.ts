@@ -13,6 +13,11 @@ export class MonitorEngine extends DurableObject {
     super(state, env);
     this.state = state;
     this.env = env;
+    // 【优化 1】启用内置心跳自动响应（降低处理开销）
+    // 这会让 DO 自动处理控制帧 ping/pong
+    this.state.setWebSocketAutoResponse(
+      new WebSocketRequestResponsePair('ping', 'pong')
+    );
   }
 
   // ====================== 初始化表 ======================
@@ -56,6 +61,17 @@ export class MonitorEngine extends DurableObject {
 
 
   async fetch(request: Request) {
+    //     // === 调试日志 ===
+    console.log(`[DO Fetch] Path: ${new URL(request.url).pathname}`);
+    console.log(`[DO Fetch] Upgrade Header: ${request.headers.get("Upgrade")}`);
+    console.log(`[DO Fetch] Secure Key Header: ${request.headers.get("X-Intferfnal-Calla")}`);
+        // 1. 获取当前所有活跃链接的数量
+    // state.getWebSockets() 返回当前 DO 实例中所有处于 open 状态的 WS 数组
+    const allSockets = this.state.getWebSockets();
+    const connectionCount = allSockets.length;
+    
+    console.log(`[WSS] Received message from ${connectionCount} active connections.`);
+    // =================
     // 防止外部直接调用 DO
     if (request.headers.get("X-Intferfnal-Calla") !== this.env.SECURE_KEY) {
       return new Response("Forbidden", { status: 403 });
@@ -87,14 +103,54 @@ export class MonitorEngine extends DurableObject {
 
     if (request.method === "OPTIONS") return new Response(null, { headers: corsHeaders });
 
-    // API: 获取监控项
+    // WebSocket Upgrade
+    if (request.headers.get("Upgrade") === "websocket") {
+      const pair = new WebSocketPair();
+      const [client, server] = Object.values(pair);
+
+      // 【优化 2】接受连接并关联标签（方便以后按需分类广播）
+      this.state.acceptWebSocket(server, ["monitor-client"]);
+
+      // 这里的 sessions.add(server) 删掉
+      return new Response(null, { status: 101, webSocket: client });
+    }
+
+    // API: 获取监控项 (支持分页)
     if (url.pathname === "/api/monitors" && request.method === "GET") {
-      const monitors = Array.from(this.monitors.values()).map(monitor => {
-        // 创建一个干净的副本，不包含 history24h
+      const page = parseInt(url.searchParams.get("page") || "1");
+      const pageSize = parseInt(url.searchParams.get("pageSize") || "20");
+
+      const allMonitors = Array.from(this.monitors.values());
+      // 按创建时间倒序排序
+      allMonitors.sort((a, b) => {
+        const timeA = new Date(a.created_at || 0).getTime();
+        const timeB = new Date(b.created_at || 0).getTime();
+        return timeB - timeA;
+      });
+
+      const total = allMonitors.length;
+      const upCount = allMonitors.filter(m => m.status === 'up').length;
+      const downCount = allMonitors.filter(m => m.status === 'down').length;
+      const totalUptime = allMonitors.reduce((acc, m) => acc + (m.uptime || 0), 0);
+      const avgUptime = total > 0 ? (totalUptime / total).toFixed(1) : '---';
+
+      const start = (page - 1) * pageSize;
+      const paginatedMonitors = allMonitors.slice(start, start + pageSize).map(monitor => {
+        // 创建一个干净的副本，不包含 history24h (后端私有数据)
         const { history24h, ...cleanMonitor } = monitor;
         return cleanMonitor;
       });
-      return Response.json(monitors, { headers: corsHeaders });
+
+      return Response.json({
+        monitors: paginatedMonitors,
+        total,
+        upCount,
+        downCount,
+        avgUptime,
+        page,
+        pageSize,
+        totalPages: Math.ceil(total / pageSize)
+      }, { headers: corsHeaders });
     }
 
     // API: 添加监控项
@@ -231,15 +287,37 @@ export class MonitorEngine extends DurableObject {
         return this.checkSite(m);
       }));
 
-      // 3. 链式调用：检查是否还有剩余到期任务
-      const remaining = Array.from(this.monitors.values()).filter(m => new Date(m.next_check).getTime() <= now).length;
+      // 3. 计算统计数据并推送当前批次结果
+      const allMonitors = Array.from(this.monitors.values());
+      const total = allMonitors.length;
+      const upCount = allMonitors.filter(m => m.status === 'up').length;
+      const downCount = allMonitors.filter(m => m.status === 'down').length;
+      const totalUptime = allMonitors.reduce((acc, m) => acc + (m.uptime || 0), 0);
+      const avgUptime = total > 0 ? (totalUptime / total).toFixed(1) : '---';
+
+      this.broadcast({
+        type: 'update',
+        monitors: dueMonitors.map(monitor => {
+          const { history24h, ...cleanMonitor } = monitor;
+          return cleanMonitor;
+        }),
+        total,
+        upCount,
+        downCount,
+        avgUptime
+      });
+
+      // 4. 链式调用：检查是否还有剩余到期任务
+      const remaining = allMonitors.filter(m => new Date(m.next_check).getTime() <= now).length;
 
       if (remaining > 0) {
-        await this.saveToSqlite();
         console.log(`[MonitorEngine] 还有 ${remaining} 个任务等待处理，1秒后继续...`);
         await this.state.storage.setAlarm(Date.now() + 1000);
         return;
       }
+
+      // 5. 没有监控任务了，保存到 SQLite
+      await this.saveToSqlite();
     }
 
     // 4. 如果没有到期任务，寻找最近的一个任务时间并设定闹钟
@@ -247,7 +325,9 @@ export class MonitorEngine extends DurableObject {
       .filter(m => new Date(m.next_check).getTime() > now)
       .sort((a, b) => new Date(a.next_check).getTime() - new Date(b.next_check).getTime())[0];
 
-    await this.saveToSqlite();
+    // 此处不需要再次 saveToSqlite，因为在 remaining 检查或处理完 dueMonitors 后已经保存过
+    // 也不需要在此处 broadcast，因为如果 dueMonitors.length > 0 已经在上面推送过了
+    // 如果由于某种原因需要全量更新，可以在这里保留全量推送，但用户要求局部更新。
 
     if (nextTask) {
       const nextTime = new Date(nextTask.next_check).getTime();
@@ -499,6 +579,7 @@ export class MonitorEngine extends DurableObject {
       monitorData.uptime = monitorData.uptime24h;   // 兼容前端显示
 
       this.monitors.set(monitor.id, monitorData);
+      //this.broadcast({ type: 'update', monitor: monitorData });
     }
 
     // ============================
@@ -610,6 +691,7 @@ export class MonitorEngine extends DurableObject {
 
       monitorData.uptime = monitorData.uptime24h;   // 兼容前端显示
       this.monitors.set(monitor.id, monitorData);
+      //this.broadcast({ type: 'update', monitor: monitorData });
     }
 
     // ============================
@@ -677,4 +759,77 @@ export class MonitorEngine extends DurableObject {
   async kvDelete(key: string) {
     this.kvMemory.delete(key);
   }
+
+  // ====================== WebSocket 处理 ======================
+  /**
+ * 【优化 3】增强版广播函数
+ * 自动过滤死链，处理 ReadyState
+ */
+  private broadcast(data: any) {
+    const message = JSON.stringify(data);
+    const sockets = this.state.getWebSockets("monitor-client");
+
+    let closedCount = 0;
+    sockets.forEach(ws => {
+      try {
+        // 只对处于 OPEN 状态的连接发送
+        if (ws.readyState === WebSocket.OPEN) {
+          ws.send(message);
+        } else if (ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) {
+          ws.close(); // 确保彻底清理
+          closedCount++;
+        }
+      } catch (e) {
+        console.error("[WSS] Broadcast error for a socket, closing it.");
+        ws.close(1011, "Broadcast failed");
+        closedCount++;
+      }
+    });
+
+    if (closedCount > 0) {
+      console.log(`[WSS] Cleaned up ${closedCount} dead/closing connections during broadcast.`);
+    }
+  }
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
+
+    // 处理前端发送的消息
+    if (typeof message === 'string') {
+      try {
+        // 解析 JSON 消息
+        const parsedMessage = JSON.parse(message);
+
+        // 如果是 ping 消息，回应 pong
+        if (parsedMessage.type === 'ping') {
+          ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
+          return;
+        }
+
+        // 可以在这里处理其他消息类型
+        console.log('Received message:', parsedMessage);
+      } catch (e) {
+        // 如果不是 JSON 格式的消息，检查是否为简单的 ping
+        if (message.trim() === 'ping') {
+          ws.send('pong');
+          return;
+        }
+        console.log('Received non-JSON message:', message);
+      }
+    } else {
+      console.log('Received binary message');
+    }
+  }
+  // 【优化 5】连接关闭时的自动处理
+  // 注意：在 DO 中，只要你使用了 acceptWebSocket，
+  // 即使不写以下函数，getWebSockets 也会在连接断开后自动剔除它们
+  async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
+    console.log(`[WSS] Connection closed: ${code} ${reason}`);
+    ws.close(); // 确保 DO 资源回收
+  }
+
+  async webSocketError(ws: WebSocket, error: any) {
+    console.error(`[WSS] Connection error:`, error);
+    ws.close(1011, "Uncaught error");
+  }
+
+
 }

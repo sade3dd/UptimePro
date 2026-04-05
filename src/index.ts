@@ -1,6 +1,7 @@
 import { MonitorEngine } from "./tg-queue.js";
 import auth, { isAuthenticated, UNAUTH_ROUTES } from "./auth.js";
-import { INDEX_HTML, NO_HTML } from "./ui.js";
+import NO_HTML_CONTENT from "./template/404.html"
+import INDEX_HTML_CONTENT from "./template/index.html"
 export interface Env {
   MONITOR_ENGINE: DurableObjectNamespace;
   FIXED_USERNAME?: string;
@@ -42,7 +43,7 @@ export default {
       FIXED_PASSWORD === 'password' ||
       FIXED_PASSWORD.length < MIN_PASSWORD_LENGTH
     ) {
-      return new Response(NO_HTML, {
+      return new Response(NO_HTML_CONTENT, {
         status: 503,
         headers: {
           "Content-Type": "text/html; charset=utf-8",
@@ -60,12 +61,27 @@ export default {
       const jwtSecret = env.JWT_SECRET || 'k1PtweQ69UBRzdOIla2n6AJf9ovp3TvFBhvbeUIOxSmCEPOvQwfRGBuzeaHwKfjNIJb7JtaEruvYkjPUp5eZpZ';
       const authenticated = await isAuthenticated(request, jwtSecret);
       if (!authenticated) {
+        // 如果是 API 或 WebSocket 请求，返回 401
+        if (url.pathname.startsWith("/api/") || request.headers.get("Upgrade") === "websocket") {
+          return new Response("Unauthorized", { status: 401 });
+        }
+        console.log("未认证请求", url.pathname);
         return Response.redirect(new URL("/login", request.url).toString(), 302);
       }
     }
 
     const id = env.MONITOR_ENGINE.idFromName("global_monitor");
     const obj = env.MONITOR_ENGINE.get(id);
+
+    // 处理 WebSocket 升级
+// 处理 WebSocket 升级 或 API 请求
+    if (request.headers.get("Upgrade")?.toLowerCase() === "websocket" || url.pathname.startsWith("/api/")) {
+      // 尝试直接修改 headers，如果不行再用 new Request
+      const newHeaders = new Headers(request.headers);
+      newHeaders.set("X-Intferfnal-Calla", env.SECURE_KEY || "IsC3jy5A1axaCxX3I8mP8fE7sjfHiKGQe1Mi");
+      
+      return obj.fetch(new Request(request, { headers: newHeaders }));
+    }
 
     if (url.pathname.startsWith("/api/")) {
       return obj.fetch(
@@ -78,8 +94,11 @@ export default {
       );
 
     }
+    if (url.pathname === "/") {
+      return new Response(INDEX_HTML_CONTENT, { headers: corsHeaders });
+    }
 
-    return new Response(INDEX_HTML, { headers: corsHeaders });
+    return Response.redirect(new URL("/login", request.url).toString(), 302);
   },
 
   async scheduled(event: ScheduledEvent, env: Env, ctx: ExecutionContext) {
