@@ -1,9 +1,11 @@
 import { MonitorEngine } from "./tg-queue.js";
+import { WSSEngine } from "./wss-engine.js";
 import auth, { isAuthenticated, UNAUTH_ROUTES } from "./auth.js";
 import NO_HTML_CONTENT from "./template/404.html"
 import INDEX_HTML_CONTENT from "./template/index.html"
 export interface Env {
   MONITOR_ENGINE: DurableObjectNamespace;
+  WS_ENGINE: DurableObjectNamespace;
   FIXED_USERNAME?: string;
   FIXED_PASSWORD?: string;
   JWT_SECRET?: string;
@@ -74,12 +76,14 @@ export default {
     const id = env.MONITOR_ENGINE.idFromName("global_monitor");
     const obj = env.MONITOR_ENGINE.get(id);
 
-    // 处理 WebSocket 升级
+    const wssId = env.WS_ENGINE.idFromName("global_wss");
+    const wssObj = env.WS_ENGINE.get(wssId);
+
     // 处理 WebSocket 升级
     if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
       const newRequest = new Request(request);
       newRequest.headers.set("X-Intferfnal-Calla", env.SECURE_KEY || "IsC3jy5A1axaCxX3I8mP8fE7sjfHiKGQe1Mi");
-      return obj.fetch(newRequest);
+      return wssObj.fetch(newRequest);
     }
     // 处理 API 请求
     if (url.pathname.startsWith("/api/")) {
@@ -109,4 +113,4 @@ export default {
   }
 };
 
-export { MonitorEngine };
+export { MonitorEngine, WSSEngine };
