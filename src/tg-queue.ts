@@ -13,11 +13,18 @@ export class MonitorEngine extends DurableObject {
     super(state, env);
     this.state = state;
     this.env = env;
-
+    // 【优化 1】启用内置心跳自动响应（降低处理开销）
+    // 这会让 DO 自动处理控制帧 ping/pong
+    this.state.setWebSocketAutoResponse(
+      new WebSocketRequestResponsePair('ping', 'pong')
+    );
   }
 
-  // ====================== 初始化表 ======================
+  // ====================== 异步初始化逻辑 ======================
   async initTable() {
+    // 防止重复初始化
+    if (this.initialized) return;
+
     this.state.storage.sql.exec(`
       CREATE TABLE IF NOT EXISTS data_store (
         key TEXT PRIMARY KEY,
@@ -25,18 +32,16 @@ export class MonitorEngine extends DurableObject {
       );
     `);
 
-    // 从 SQLite 加载数据到内存
     const rows = this.state.storage.sql.exec("SELECT key, value FROM data_store").toArray();
     for (const row of rows) {
       const key = row.key as string;
       try {
-        // 尝试用 MessagePack 解码
         const value: any = decode(row.value as ArrayBuffer);
         if (key === 'monitors') {
           this.monitors = new Map(Object.entries(value));
         }
       } catch (e) {
-        // 如果解码失败，尝试用 JSON 解码
+        // 回退逻辑
         try {
           const value = JSON.parse(new TextDecoder().decode(row.value as ArrayBuffer));
           if (key === 'monitors') {
@@ -48,6 +53,7 @@ export class MonitorEngine extends DurableObject {
       }
     }
     this.initialized = true;
+    console.log(`[DO] Database initialized with ${this.monitors.size} monitors.`);
   }
 
   async saveToSqlite() {
@@ -57,28 +63,29 @@ export class MonitorEngine extends DurableObject {
 
 
   async fetch(request: Request) {
-    //     // === 调试日志 ===
-    console.log(`[DO Fetch] Path: ${new URL(request.url).pathname}`);
-    console.log(`[DO Fetch] Upgrade Header: ${request.headers.get("Upgrade")}`);
-    console.log(`[DO Fetch] Secure Key Header: ${request.headers.get("X-Intferfnal-Calla")}`);
-        // 1. 获取当前所有活跃链接的数量
-    // state.getWebSockets() 返回当前 DO 实例中所有处于 open 状态的 WS 数组
-    const allSockets = this.state.getWebSockets();
-    const connectionCount = allSockets.length;
+    const url = new URL(request.url);
     
-    console.log(`[WSS] Received message from ${connectionCount} active connections.`);
-    // =================
-    // 防止外部直接调用 DO
+    // 1. 权限校验（最快路径）
     if (request.headers.get("X-Intferfnal-Calla") !== this.env.SECURE_KEY) {
       return new Response("Forbidden", { status: 403 });
     }
-    const url = new URL(request.url);
 
-    if (!this.initialized) {
-      await this.initTable();
-      this.initialized = true;
+    // 2. WebSocket 升级逻辑（必须非阻塞）
+    if (request.headers.get("Upgrade") === "websocket") {
+      const pair = new WebSocketPair();
+      const [client, server] = Object.values(pair);
+
+      // 立即接受连接
+      this.state.acceptWebSocket(server, ["monitor-client"]);
+
+     return new Response(null, { status: 101, webSocket: client });
     }
 
+    // 3. API 请求处理（API 需要数据，所以必须等待初始化）
+    if (!this.initialized) {
+      // 这里的 await 是安全的，因为 API 请求不是 WebSocket 握手
+      await this.initTable();
+    }
     const securityHeaders = {
       "Content-Security-Policy":
         "default-src 'self'; " +
