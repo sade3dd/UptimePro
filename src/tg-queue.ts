@@ -13,11 +13,6 @@ export class MonitorEngine extends DurableObject {
     super(state, env);
     this.state = state;
     this.env = env;
-    // 【优化 1】启用内置心跳自动响应（降低处理开销）
-    // 这会让 DO 自动处理控制帧 ping/pong
-    this.state.setWebSocketAutoResponse(
-      new WebSocketRequestResponsePair('ping', 'pong')
-    );
   }
 
   // ====================== 异步初始化逻辑 ======================
@@ -48,12 +43,12 @@ export class MonitorEngine extends DurableObject {
             this.monitors = new Map(Object.entries(value));
           }
         } catch (jsonError) {
-          console.error('Failed to parse stored data:', jsonError);
+          //console.error('Failed to parse stored data:', jsonError);
         }
       }
     }
     this.initialized = true;
-    console.log(`[DO] Database initialized with ${this.monitors.size} monitors.`);
+    // ///console.log(`[DO] Database initialized with ${this.monitors.size} monitors.`);
   }
 
   async saveToSqlite() {
@@ -64,22 +59,10 @@ export class MonitorEngine extends DurableObject {
 
   async fetch(request: Request) {
     const url = new URL(request.url);
-    //console.log(Object.fromEntries(request.headers));
     
     // 1. 权限校验（最快路径）
     if (request.headers.get("X-Intferfnal-Calla") !== this.env.SECURE_KEY) {
       return new Response("Forbidden", { status: 403 });
-    }
-
-    // 2. WebSocket 升级逻辑（必须非阻塞）
-    if (request.headers.get("Upgrade") === "websocket") {
-      const pair = new WebSocketPair();
-      const [client, server] = Object.values(pair);
-
-      // 立即接受连接
-      this.state.acceptWebSocket(server, ["monitor-client"]);
-
-     return new Response(null, { status: 101, webSocket: client });
     }
 
     // 3. API 请求处理（API 需要数据，所以必须等待初始化）
@@ -255,12 +238,12 @@ export class MonitorEngine extends DurableObject {
    */
   async alarm() {
     if (!this.initialized) {
-      console.log('初始化数据库');
+      //console.log('初始化数据库');
       await this.initTable();
       await this.state.storage.setAlarm(Date.now() + 3000);
       this.initialized = true;
     } else {
-      console.log('数据库已初始化 ');
+      //console.log('数据库已初始化 ');
     }
     const now = Date.now();
 
@@ -268,7 +251,7 @@ export class MonitorEngine extends DurableObject {
     const dueMonitors = Array.from(this.monitors.values()).filter(m => new Date(m.next_check).getTime() <= now).slice(0, 5);
 
     if (dueMonitors.length > 0) {
-      console.log(`[MonitorEngine] 正在处理 ${dueMonitors.length} 个到期任务...`);
+      //console.log(`[MonitorEngine] 正在处理 ${dueMonitors.length} 个到期任务...`);
 
       // 2. 并发执行
       // 2. 并发执行（带间隔）
@@ -287,7 +270,6 @@ export class MonitorEngine extends DurableObject {
       const downCount = allMonitors.filter(m => m.status === 'down').length;
       const totalUptime = allMonitors.reduce((acc, m) => acc + (m.uptime || 0), 0);
       const avgUptime = total > 0 ? (totalUptime / total).toFixed(1) : '---';
-
       this.broadcast({
         type: 'update',
         monitors: dueMonitors.map(monitor => {
@@ -299,12 +281,11 @@ export class MonitorEngine extends DurableObject {
         downCount,
         avgUptime
       });
-
       // 4. 链式调用：检查是否还有剩余到期任务
       const remaining = allMonitors.filter(m => new Date(m.next_check).getTime() <= now).length;
 
       if (remaining > 0) {
-        console.log(`[MonitorEngine] 还有 ${remaining} 个任务等待处理，1秒后继续...`);
+        //console.log(`[MonitorEngine] 还有 ${remaining} 个任务等待处理，1秒后继续...`);
         await this.state.storage.setAlarm(Date.now() + 1000);
         return;
       }
@@ -326,12 +307,12 @@ export class MonitorEngine extends DurableObject {
       const nextTime = new Date(nextTask.next_check).getTime();
       const delay = Math.min(60000, Math.max(10000, nextTime - now)); // 最长60秒
       const nextTimeStr = new Date(Date.now() + delay).toLocaleString();
-      console.log(`[MonitorEngine] 无即时任务，下次任务在 ${nextTimeStr}`);
+      //console.log(`[MonitorEngine] 无即时任务，下次任务在 ${nextTimeStr}`);
       await this.state.storage.setAlarm(Date.now() + delay);
     } else {
       // 彻底没任务，30秒后醒来检查一次（保活）
       const nextTimeStr = new Date(Date.now() + 30000).toLocaleString();
-      console.log(`[MonitorEngine] 无任务，30秒后检查（保活） ${nextTimeStr}`);
+      //console.log(`[MonitorEngine] 无任务，30秒后检查（保活） ${nextTimeStr}`);
       await this.state.storage.setAlarm(Date.now() + 30000);
     }
   }
@@ -347,7 +328,7 @@ export class MonitorEngine extends DurableObject {
     let errorMessage = "";
 
     try {
-      console.log(`[Monitor] 开始检查 ${monitor.url}`);
+      //console.log(`[Monitor] 开始检查 ${monitor.url}`);
 
       // ============================
       // 0. 检查是否为 IP 地址 (Workers 不支持直接 IP 监控)
@@ -376,7 +357,7 @@ export class MonitorEngine extends DurableObject {
 
           // 只允许合法 header 名
           if (!/^[a-z0-9-]+$/.test(k)) {
-            console.warn(`[Monitor] Illegal header removed: ${rawKey}`);
+            //console.warn(`[Monitor] Illegal header removed: ${rawKey}`);
             continue;
           }
 
@@ -425,7 +406,7 @@ export class MonitorEngine extends DurableObject {
             headers = sanitizeHeaders(parsed);
           }
         } catch (e) {
-          console.error("[Monitor] Headers parse error:", e);
+          //console.error("[Monitor] Headers parse error:", e);
         }
       }
 
@@ -507,15 +488,15 @@ export class MonitorEngine extends DurableObject {
       if (!success) {
         const text = await res.text().catch(() => "");
         errorMessage = `HTTP ${statusCode}`;
-        console.log(`[Monitor] ${monitor.url} - ${statusCode} (${latency}ms) ${text} - FAIL`);
+        //console.log(`[Monitor] ${monitor.url} - ${statusCode} (${latency}ms) ${text} - FAIL`);
       } else {
-        console.log(`[Monitor] ${monitor.url} - ${statusCode} (${latency}ms) - OK`);
+        //console.log(`[Monitor] ${monitor.url} - ${statusCode} (${latency}ms) - OK`);
       }
 
     } catch (e: any) {
       success = false;
       errorMessage = e.message || "Timeout/Network Error";
-      console.error(`[Monitor] ${monitor.url} - ERROR: ${errorMessage}`);
+      //console.error(`[Monitor] ${monitor.url} - ERROR: ${errorMessage}`);
     }
 
     // ============================
@@ -580,7 +561,7 @@ export class MonitorEngine extends DurableObject {
     // ============================
     if (monitor.status !== "unknown" && monitor.status !== newStatus && monitor.notify === 1) {
       this.sendNotification(monitor, newStatus, statusCode, errorMessage).catch(e => {
-        console.error("[MonitorEngine] 通知发送失败:", e);
+        //console.error("[MonitorEngine] 通知发送失败:", e);
       });
     }
   }
@@ -592,7 +573,7 @@ export class MonitorEngine extends DurableObject {
     let socket: any = null;
 
     try {
-      console.log(`[Monitor] 开始 TCP 检查 ${monitor.url}`);
+      //console.log(`[Monitor] 开始 TCP 检查 ${monitor.url}`);
 
       let host = "";
       let port = 0;
@@ -620,11 +601,11 @@ export class MonitorEngine extends DurableObject {
       await Promise.race([socket.opened, timeoutPromise]);
 
       success = true;
-      console.log(`[Monitor] TCP ${host}:${port} - OK`);
+      //console.log(`[Monitor] TCP ${host}:${port} - OK`);
     } catch (e: any) {
       success = false;
       errorMessage = e.message || "TCP Connection Error";
-      console.error(`[Monitor] TCP ${monitor.url} - ERROR: ${errorMessage}`);
+      //console.error(`[Monitor] TCP ${monitor.url} - ERROR: ${errorMessage}`);
     } finally {
       if (socket) {
         socket.close().catch(() => { });
@@ -692,7 +673,7 @@ export class MonitorEngine extends DurableObject {
     // ============================
     if (monitor.status !== "unknown" && monitor.status !== newStatus && monitor.notify === 1) {
       this.sendNotification(monitor, newStatus, success ? 200 : 0, errorMessage).catch(e => {
-        console.error("[MonitorEngine] 通知发送失败:", e);
+        //console.error("[MonitorEngine] 通知发送失败:", e);
       });
     }
   }
@@ -734,7 +715,7 @@ export class MonitorEngine extends DurableObject {
         })
       });
     } catch (e) {
-      console.error("[MonitorEngine] 发送 TG 通知失败:", e);
+      //console.error("[MonitorEngine] 发送 TG 通知失败:", e);
     }
   }
 
@@ -754,63 +735,17 @@ export class MonitorEngine extends DurableObject {
   }
 
   // ====================== WebSocket 处理 ======================
-  /**
- * 【优化 3】增强版广播函数
- * 自动过滤死链，处理 ReadyState
- */
-  private broadcast(data: any) {
-    const message = JSON.stringify(data);
-    const sockets = this.state.getWebSockets("monitor-client");
+  private async broadcast(data: any) {
+    const wssId = this.env.WS_ENGINE.idFromName("global_wss");
+    const wssObj = this.env.WS_ENGINE.get(wssId);
+    await wssObj.fetch(new Request("http://internal/broadcast", {
+      method: "POST",
+      headers: { 
+        "Content-Type": "application/json",
+        "X-Intferfnal-Calla": this.env.SECURE_KEY || "IsC3jy5A1axaCxX3I8mP8fE7sjfHiKGQe1Mi"
+      },
+      body: JSON.stringify(data)
+    })).catch(() => {});
 
-    let closedCount = 0;
-    sockets.forEach(ws => {
-      try {
-        // 只对处于 OPEN 状态的连接发送
-        if (ws.readyState === WebSocket.OPEN) {
-          ws.send(message);
-        } else if (ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) {
-          ws.close(); // 确保彻底清理
-          closedCount++;
-        }
-      } catch (e) {
-        console.error("[WSS] Broadcast error for a socket, closing it.");
-        ws.close(1011, "Broadcast failed");
-        closedCount++;
-      }
-    });
-
-    if (closedCount > 0) {
-      console.log(`[WSS] Cleaned up ${closedCount} dead/closing connections during broadcast.`);
-    }
-  }
-  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
-
-    // 处理前端发送的消息
-    if (typeof message === 'string') {
-      try {
-        // 可以在这里处理其他消息类型
-        console.log('Received message:', 1);
-      } catch (e) {
-        // 如果不是 JSON 格式的消息，检查是否为简单的 ping
-
-        console.log('Received non-JSON message:', 2);
-      }
-    } else {
-      console.log('Received binary message');
-    }
-  }
-  // 【优化 5】连接关闭时的自动处理
-  // 注意：在 DO 中，只要你使用了 acceptWebSocket，
-  // 即使不写以下函数，getWebSockets 也会在连接断开后自动剔除它们
-  async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
-    console.log(`[WSS] Connection closed: ${code} ${reason}`);
-    ws.close(); // 确保 DO 资源回收
-  }
-
-  async webSocketError(ws: WebSocket, error: any) {
-    console.error(`[WSS] Connection error:`, error);
-    ws.close(1011, "Uncaught error");
-  }
-
-
+}
 }
