@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8" />
+<title>安全配置未完成 · Security Setup Required</title>
+<style>
+  body {
+    margin: 0;
+    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    background: #212529;
+    color: #e2e8f0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+  }
+  .card {
+    background: #1e293b;
+    padding: 32px;
+    border-radius: 16px;
+    max-width: 680px;
+    width: 90%;
+    box-shadow: 0 0 40px rgba(0,0,0,0.4);
+    border: 1px solid #334155;
+  }
+  h1 {
+    margin: 0 0 12px;
+    font-size: 24px;
+    color: #f8fafc;
+  }
+  p {
+    line-height: 1.6;
+    margin: 10px 0;
+  }
+  code {
+    background: #0f172a;
+    padding: 3px 6px;
+    border-radius: 6px;
+    border: 1px solid #334155;
+    font-size: 13px;
+  }
+  .warn {
+    color: #f87171;
+    font-weight: 600;
+  }
+</style>
+</head>
+<body>
+  <div class="card">
+    <h1>⚠️ 安全配置未完成 · Security Setup Required</h1>
+    <p class="warn">
+  FIXED_PASSWORD 长度必须 ≥ 12 位。  
+  FIXED_PASSWORD must be at least 12 characters long.
+</p>
+
+ 
+    <p>请在你的 <code>wrangler.jsonc vars</code>或 Cloudflare Secrets 中设置：</p>
+    <p>前往 Cloudflare Workers 修改变量和机密<p>
+
+    <p>
+      <code>FIXED_USERNAME=your_admin</code><br />
+      <code>FIXED_PASSWORD=your_strong_password</code>
+    </p>
+    <hr style="border: none; border-top: 1px solid #334155; margin: 20px 0;" />
+    <p class="warn">建议同时修改 CAPTCHA_SALT（验证码盐值）。</p>
+ 
+    <p>完成配置后请重新部署服务。</p>
+    <p>After updating the configuration, redeploy the service.</p>
+  </div>
+</body>
+</html>
