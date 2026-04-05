@@ -933,7 +933,7 @@
                         }
                     }, 20000);
 
-                    // 💡 只有当 App 已经初始化完成了，现在的 onopen 才代表是【断线重连】
+                    // // 💡 只有当 App 已经初始化完成了，现在的 onopen 才代表是【断线重连】
                     if (this.isAppInitialized && !this.isInitialLoading) {
                         console.log("[WS] 检测到断线重连，同步差量数据...");
                         this.fetchAllInitialData();
@@ -970,19 +970,19 @@
                     }
                 };
 
-                // this.ws.onclose = (e) => {
-                //     console.log(`[WS] 连接关闭 (代码: ${e.code}), 5秒后尝试重连... 🔄`);
-                //     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
+                this.ws.onclose = (e) => {
+                    console.log(`[WS] 连接关闭 (代码: ${e.code}), 5秒后尝试重连... 🔄`);
+                    if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
 
-                //     // 3. 延迟重连，增加一个简单的防抖
-                //     if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
-                //     this.reconnectTimeout = setTimeout(() => {
-                //         // 检查当前是否真的需要重连（防止在手动清理后仍然触发）
-                //         if (!this.ws || this.ws.readyState === WebSocket.CLOSED) {
-                //             this.connectWebSocket();
-                //         }
-                //     }, 20000);
-                // };
+                    // 3. 延迟重连，增加一个简单的防抖
+                    if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
+                    this.reconnectTimeout = setTimeout(() => {
+                        // 检查当前是否真的需要重连（防止在手动清理后仍然触发）
+                        if (!this.ws || this.ws.readyState === WebSocket.CLOSED) {
+                            this.connectWebSocket();
+                        }
+                    }, 30000);
+                };
 
                 this.ws.onerror = (err) => {
                     console.error("[WS] 发生错误", err);
