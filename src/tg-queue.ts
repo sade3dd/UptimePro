@@ -8,12 +8,16 @@ export class MonitorEngine extends DurableObject {
   private initialized = false;
   private monitors = new Map<string, any>();
   private kvMemory = new Map<string, any>();
-  private sessions = new Set<WebSocket>();
+
   constructor(state: DurableObjectState, env: any) {
     super(state, env);
     this.state = state;
     this.env = env;
-
+    // 【优化 1】启用内置心跳自动响应（降低处理开销）
+    // 这会让 DO 自动处理控制帧 ping/pong
+    this.state.setWebSocketAutoResponse(
+      new WebSocketRequestResponsePair('ping', 'pong')
+    );
   }
 
   // ====================== 异步初始化逻辑 ======================
@@ -60,40 +64,22 @@ export class MonitorEngine extends DurableObject {
 
   async fetch(request: Request) {
     const url = new URL(request.url);
+    //console.log(Object.fromEntries(request.headers));
     
     // 1. 权限校验（最快路径）
-    const secureKey = this.env.SECURE_KEY || "IsC3jy5A1axaCxX3I8mP8fE7sjfHiKGQe1Mi";
-    const internalKey =  request.headers.get("X-Intferfnal-Calla");
-    
-    if (internalKey !== secureKey) {
-      console.warn(`[DO] Forbidden access attempt to ${url.pathname}`);
+    if (request.headers.get("X-Intferfnal-Calla") !== this.env.SECURE_KEY) {
       return new Response("Forbidden", { status: 403 });
     }
 
-
     // 2. WebSocket 升级逻辑（必须非阻塞）
-    if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
-      console.log(`[DO] Handling WebSocket upgrade for ${url.pathname}`);
+    if (request.headers.get("Upgrade") === "websocket") {
       const pair = new WebSocketPair();
       const [client, server] = Object.values(pair);
 
-      // 💡 切换回标准模式：手动 accept 并管理连接
-      server.accept();
-      this.sessions.add(server);
+      // 立即接受连接
+      this.state.acceptWebSocket(server, ["monitor-client"]);
 
-      server.addEventListener("message", (msg) => {
-        this.webSocketMessage(server, msg.data);
-      });
-
-      server.addEventListener("close", (evt) => {
-        this.webSocketClose(server, evt.code, evt.reason, evt.wasClean);
-      });
-
-      server.addEventListener("error", (err) => {
-        this.webSocketError(server, err);
-      });
-
-      return new Response(null, { status: 101, webSocket: client });
+     return new Response(null, { status: 101, webSocket: client });
     }
 
     // 3. API 请求处理（API 需要数据，所以必须等待初始化）
@@ -185,22 +171,24 @@ export class MonitorEngine extends DurableObject {
       this.monitors.set(id, newMonitor);
       await this.saveToSqlite();
       await this.state.storage.setAlarm(Date.now() + 1000);
-      return Response.json({ success: true }, { headers: corsHeaders });
+            // 💡 返回新创建的对象，方便前端局部更新
+      const { history24h, ...cleanMonitor } = newMonitor;
+      return Response.json({ success: true, monitor: cleanMonitor }, { headers: corsHeaders });
     }
 
     // API: 修改监控项
     if (url.pathname.startsWith("/api/monitors/") && request.method === "PUT") {
-      const id = url.pathname.split("/").pop();
+         const id = url.pathname.split("/").pop();
       if (id && this.monitors.has(id)) {
         const body = await request.json() as any;
-        // 确保 headers 是 JSON 字符串
-        if (body.headers && typeof body.headers === 'object') {
-          body.headers = JSON.stringify(body.headers);
-        }
         const monitor = this.monitors.get(id);
-        this.monitors.set(id, { ...monitor, ...body });
+        const updatedMonitor = { ...monitor, ...body };
+        this.monitors.set(id, updatedMonitor);
         await this.saveToSqlite();
-        return Response.json({ success: true }, { headers: corsHeaders });
+        
+        // 💡 返回更新后的对象
+        const { history24h, ...cleanMonitor } = updatedMonitor;
+        return Response.json({ success: true, monitor: cleanMonitor }, { headers: corsHeaders });
       }
       return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
     }
@@ -766,59 +754,62 @@ export class MonitorEngine extends DurableObject {
   }
 
   // ====================== WebSocket 处理 ======================
+  /**
+ * 【优化 3】增强版广播函数
+ * 自动过滤死链，处理 ReadyState
+ */
   private broadcast(data: any) {
     const message = JSON.stringify(data);
-    
-    this.sessions.forEach(ws => {
+    const sockets = this.state.getWebSockets("monitor-client");
+
+    let closedCount = 0;
+    sockets.forEach(ws => {
       try {
-        if (ws.readyState === 1) { // WebSocket.OPEN
+        // 只对处于 OPEN 状态的连接发送
+        if (ws.readyState === WebSocket.OPEN) {
           ws.send(message);
-        } else {
-          this.sessions.delete(ws);
+        } else if (ws.readyState === WebSocket.CLOSING || ws.readyState === WebSocket.CLOSED) {
+          ws.close(); // 确保彻底清理
+          closedCount++;
         }
       } catch (e) {
-        this.sessions.delete(ws);
+        console.error("[WSS] Broadcast error for a socket, closing it.");
+        ws.close(1011, "Broadcast failed");
+        closedCount++;
       }
     });
-  }
 
-  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
-    if (typeof message === 'string') {
-      const trimmed = message.trim();
-      
-      // 1. 处理字符串格式的 ping (最常用)
-      if (trimmed === 'ping') {
-        console.log("[WSS] Received string ping, sending pong");
-        ws.send('pong');
-        return;
-      }
-
-      try {
-        // 2. 处理 JSON 格式的 ping
-        const parsed = JSON.parse(trimmed);
-        if (parsed.type === 'ping') {
-          ws.send(JSON.stringify({ type: 'pong', timestamp: Date.now() }));
-          return;
-        }
-        console.log('[WSS] Received JSON:', parsed);
-      } catch (e) {
-        // 普通文本消息
-        console.log('[WSS] Received text:', trimmed);
-      }
+    if (closedCount > 0) {
+      console.log(`[WSS] Cleaned up ${closedCount} dead/closing connections during broadcast.`);
     }
   }
+  async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
 
+    // 处理前端发送的消息
+    if (typeof message === 'string') {
+      try {
+        // 可以在这里处理其他消息类型
+        console.log('Received message:', 1);
+      } catch (e) {
+        // 如果不是 JSON 格式的消息，检查是否为简单的 ping
+
+        console.log('Received non-JSON message:', 2);
+      }
+    } else {
+      console.log('Received binary message');
+    }
+  }
+  // 【优化 5】连接关闭时的自动处理
+  // 注意：在 DO 中，只要你使用了 acceptWebSocket，
+  // 即使不写以下函数，getWebSockets 也会在连接断开后自动剔除它们
   async webSocketClose(ws: WebSocket, code: number, reason: string, wasClean: boolean) {
-    console.log(`[WSS] Connection closed: Code=${code}, Reason=${reason}, Clean=${wasClean}`);
-    this.sessions.delete(ws);
-    // 显式关闭以释放资源
-    try { ws.close(code, reason); } catch (e) {}
+    console.log(`[WSS] Connection closed: ${code} ${reason}`);
+    ws.close(); // 确保 DO 资源回收
   }
 
   async webSocketError(ws: WebSocket, error: any) {
     console.error(`[WSS] Connection error:`, error);
-    this.sessions.delete(ws);
-    try { ws.close(1011, "Uncaught error"); } catch (e) {}
+    ws.close(1011, "Uncaught error");
   }
 
 
