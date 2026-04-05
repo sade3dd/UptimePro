@@ -13,6 +13,12 @@
 				"MonitorEngine"
 			],
 			"tag": "v1"
+		},
+		{
+			"new_classes": [
+				"WSSEngine"
+			],
+			"tag": "v2"
 		}
 	],
 	"durable_objects": {
