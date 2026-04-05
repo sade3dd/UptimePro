@@ -73,15 +73,14 @@ export default {
     const id = env.MONITOR_ENGINE.idFromName("global_monitor");
     const obj = env.MONITOR_ENGINE.get(id);
 
-    // 处理 WebSocket 升级
-// 处理 WebSocket 升级 或 API 请求
-    if (request.headers.get("Upgrade")?.toLowerCase() === "websocket" ) {
-       // 💡 修复：使用 URL 参数传递内部 Key，这样可以完全保留原始 Request 对象
-      // 这种方式转发 WebSocket 最为稳妥
-      const newUrl = new URL(request.url);
-      newUrl.searchParams.set("_internal_key", env.SECURE_KEY || "IsC3jy5A1axaCxX3I8mP8fE7sjfHiKGQe1Mi");
+
+    // 处理 WebSocket 升级 或 API 请求
+    if (request.headers.get("Upgrade")?.toLowerCase() === "websocket" || url.pathname.startsWith("/api/")) {
+      // 💡 修复：使用 clone() 并在新请求中添加 header，这是转发 WebSocket 最稳妥的方式
+      const newRequest = new Request(request);
+      newRequest.headers.set("X-Intferfnal-Calla", env.SECURE_KEY || "IsC3jy5A1axaCxX3I8mP8fE7sjfHiKGQe1Mi");
       
-      return obj.fetch(new Request(newUrl, request));
+      return obj.fetch(newRequest);
     }
 
     if (url.pathname.startsWith("/api/")) {
