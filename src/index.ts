@@ -9,6 +9,7 @@ export interface Env {
   JWT_SECRET?: string;
   CAPTCHA_SALT?: string;
   SECURE_KEY?: string;
+
 }
 
 export default {
@@ -73,26 +74,23 @@ export default {
     const id = env.MONITOR_ENGINE.idFromName("global_monitor");
     const obj = env.MONITOR_ENGINE.get(id);
 
-
-    // 处理 WebSocket 升级 或 API 请求
-    if (request.headers.get("Upgrade")?.toLowerCase() === "websocket" || url.pathname.startsWith("/api/")) {
-      // 💡 修复：使用 clone() 并在新请求中添加 header，这是转发 WebSocket 最稳妥的方式
+    // 处理 WebSocket 升级
+    // 处理 WebSocket 升级
+    if (request.headers.get("Upgrade")?.toLowerCase() === "websocket") {
       const newRequest = new Request(request);
       newRequest.headers.set("X-Intferfnal-Calla", env.SECURE_KEY || "IsC3jy5A1axaCxX3I8mP8fE7sjfHiKGQe1Mi");
-      
       return obj.fetch(newRequest);
     }
-
+    // 处理 API 请求
     if (url.pathname.startsWith("/api/")) {
       return obj.fetch(
         new Request(request, {
           headers: {
-            ...request.headers,
+            ...Object.fromEntries(request.headers),
             "X-Intferfnal-Calla": env.SECURE_KEY || "IsC3jy5A1axaCxX3I8mP8fE7sjfHiKGQe1Mi",
           },
         }),
       );
-
     }
     if (url.pathname === "/") {
       return new Response(INDEX_HTML_CONTENT, { headers: corsHeaders });
