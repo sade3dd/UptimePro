@@ -2,9 +2,9 @@ import { Hono } from 'hono';
 import { sign, verify } from 'hono/jwt';
 import type { Context, Next } from 'hono';
 import { getCookie, setCookie } from 'hono/cookie';
-import { LOGIN_HTML} from "./ui.js";
+// import { LOGIN_HTML} from "./ui.js";
 import { cacheResponse } from './utils.js';
-import { compress } from 'hono/compress';
+import  LOGIN_HTML_CONTENT from "./template/login.html"
 // 定义无需认证的路由
 export const UNAUTH_ROUTES = {
   CAPTCHA: '/captcha',
@@ -156,7 +156,7 @@ auth.get('/login', (c: Context) => {
   c.header("X-XSS-Protection", "1; mode=block");
   c.header("Strict-Transport-Security", "max-age=31536000; includeSubDomains");
 
-  return cacheResponse(c, c.req.url, async () => c.html(LOGIN_HTML), 300);
+  return cacheResponse(c, c.req.url, async () => c.html(LOGIN_HTML_CONTENT), 300);
 
 });
 auth.get('/captcha', captchaLimiter, async (c: Context) => {
