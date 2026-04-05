@@ -13,11 +13,6 @@ export class MonitorEngine extends DurableObject {
     super(state, env);
     this.state = state;
     this.env = env;
-    // 【优化 1】启用内置心跳自动响应（降低处理开销）
-    // 这会让 DO 自动处理控制帧 ping/pong
-    this.state.setWebSocketAutoResponse(
-      new WebSocketRequestResponsePair('ping', 'pong')
-    );
   }
 
   // ====================== 异步初始化逻辑 ======================
