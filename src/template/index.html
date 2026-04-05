@@ -981,7 +981,7 @@
                         if (!this.ws || this.ws.readyState === WebSocket.CLOSED) {
                             this.connectWebSocket();
                         }
-                    }, 5000);
+                    }, 20000);
                 };
 
                 this.ws.onerror = (err) => {
