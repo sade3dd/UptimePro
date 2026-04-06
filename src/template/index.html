@@ -889,8 +889,8 @@
             renderAll() {
                 this.renderQuickMonitors();
                 this.renderMonitors();
-                // 更新全局统计
-                document.getElementById('avgUptime').innerHTML = (this.monitors.avgUptime || '---') + '<span class="fs-4 text-secondary">%</span>';
+                // 更新全局统计                
+                this.updateGlobalStats();
 
             },
 
