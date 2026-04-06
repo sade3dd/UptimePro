@@ -877,8 +877,7 @@
                 } finally {
                     this.isInitialLoading = false;
                     if (mainLoading) mainLoading.classList.remove('active');
-                    // 启动 WebSocket
-                    this.connectWebSocket();
+                    
                     // 💡 只有在这里，才标记“第一次加载彻底结束”
                     setTimeout(() => {
                         this.isAppInitialized = true;
@@ -933,11 +932,7 @@
                         }
                     }, 20000);
 
-                    // // 💡 只有当 App 已经初始化完成了，现在的 onopen 才代表是【断线重连】
-                    if (this.isAppInitialized && !this.isInitialLoading) {
-                        console.log("[WS] 检测到断线重连，同步差量数据...");
-                        this.fetchAllInitialData();
-                    }
+             
                 };
 
                 this.ws.onmessage = (event) => {
@@ -1442,6 +1437,7 @@
                 this.updateI18n();
                 this.renderQuickMonitors();
                 this.fetchAllInitialData(); // 首次加载全部数据后再连 WSS
+                this.connectWebSocket();
 
                 // 3. 定时刷新 (保留轮询作为兜底)
                 //setInterval(() => this.fetchMonitors(), 30000);
