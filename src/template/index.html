@@ -877,7 +877,7 @@
                 } finally {
                     this.isInitialLoading = false;
                     if (mainLoading) mainLoading.classList.remove('active');
-                    
+
                     // 💡 只有在这里，才标记“第一次加载彻底结束”
                     setTimeout(() => {
                         this.isAppInitialized = true;
@@ -890,10 +890,13 @@
                 this.renderQuickMonitors();
                 this.renderMonitors();
                 // 更新全局统计
-                this.updateGlobalStats();
+                document.getElementById('avgUptime').innerHTML = (this.monitors.avgUptime || '---') + '<span class="fs-4 text-secondary">%</span>';
+
             },
 
             updateGlobalStats() {
+                document.getElementById('avgUptime').innerHTML = (this.monitors.avgUptime || '---') + '<span class="fs-4 text-secondary">%</span>';
+
                 const up = this.monitors.filter(m => m.status === 'up').length;
                 const down = this.monitors.length - up;
                 document.getElementById('upCount').textContent = up;
@@ -902,6 +905,12 @@
 
             // --- 优化后的 WebSocket 逻辑 ---
             connectWebSocket() {
+                // 防止重复调用 connectWebSocket()
+                if (this.isConnecting) {
+                    console.log("[WS] 已在连接中，忽略重复调用");
+                    return;
+                }
+                this.isConnecting = true;
                 // 1. 彻底清理旧连接和定时器，防止产生多个链接
                 if (this.ws) {
                     this.ws.onclose = null; // 关键：解绑事件，防止 close() 触发下面的 scheduleReconnect
@@ -932,14 +941,42 @@
                         }
                     }, 20000);
 
-             
+
                 };
 
                 this.ws.onmessage = (event) => {
                     if (event.data === "pong") return; // 忽略后端心跳回包
                     try {
                         const data = JSON.parse(event.data);
-                        if (data.type === 'update') {
+                        if (data.type === 'add') {
+                            // 💡 新增模式：插入到数组开头并局部插入 DOM
+                            const updatedMonitor = data.monitor;
+                            this.monitors.unshift(updatedMonitor);
+                            this.total++;
+                            // 1. 主列表插入顶部
+                            const list = document.getElementById('monitorItems');
+                            if (list) {
+                                const card = document.createElement('div');
+                                card.className = 'glass monitor-card border border-white border-opacity-10';
+                                card.id = 'monitor-card-' + updatedMonitor.id;
+                                card.innerHTML = this.getMonitorCardHtml(updatedMonitor);
+                                list.prepend(card);
+
+                            }
+
+                            // 2. 侧边栏插入顶部
+                            const quickContainer = document.getElementById('quickMonitorItems');
+                            if (quickContainer) {
+                                // 如果是第一个监控项，先清空“暂无监控”提示
+                                if (this.monitors.length === 1) {
+                                    quickContainer.innerHTML = '';
+                                }
+                                quickContainer.insertAdjacentHTML('afterbegin', this.getQuickMonitorHtml(updatedMonitor));
+
+                            }
+                            this.updateGlobalStats(); // 更新全局统计数据
+
+                        } else if (data.type === 'update') {
                             const updatedMonitors = data.monitors;
                             if (Array.isArray(updatedMonitors)) {
                                 updatedMonitors.forEach(m => {
@@ -959,6 +996,19 @@
                                 document.getElementById('avgUptime').innerHTML = data.avgUptime + '<span class="fs-4 text-secondary">%</span>';
                             }
                             this.renderQuickMonitors();
+                        } else if (data.type === 'delete') {
+                            // 💡 局部删除：从数组移除并删除 DOM
+                            const id = data.id;  // ✅ 从 data.id 中获取
+                            console.log(`[WS] Deleting monitor with id: ${id}`);
+                            this.monitors = this.monitors.filter(m => m.id !== id);
+
+                            const card = document.getElementById(`monitor-card-${id}`);
+                            if (card) card.remove();
+
+                            const sidebarItem = document.getElementById(`sidebar-item-${id}`);
+                            if (sidebarItem) sidebarItem.remove();
+
+                            this.updateGlobalStats();
                         }
                     } catch (e) {
                         console.error("[WS] 消息解析错误", e);
@@ -966,7 +1016,8 @@
                 };
 
                 this.ws.onclose = (e) => {
-                    console.log(`[WS] 连接关闭 (代码: ${e.code}), 5秒后尝试重连... 🔄`);
+                    console.log("[WS] 连接关闭，30 秒后重连...");
+                    this.isConnecting = false;
                     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
 
                     // 3. 延迟重连，增加一个简单的防抖
@@ -1265,54 +1316,13 @@
                 });
 
                 if (res.ok) {
-                         const data = await res.json();
+                    const data = await res.json();
                     const updatedMonitor = data.monitor;
 
                     bootstrap.Modal.getInstance(document.getElementById('addMonitorModal')).hide();
                     document.getElementById('addMonitorForm').reset();
                     document.getElementById('m_id').value = '';
 
-                    if (id) {
-                        // 💡 修改模式：更新本地数组
-                        const index = this.monitors.findIndex(m => m.id === id);
-                        if (index !== -1) {
-                            this.monitors[index] = { ...this.monitors[index], ...updatedMonitor };
-                            this.updateMonitorCard(id);
-                            this.updateSidebarItem(id);
-                        }
-                    } else {
-                        // 💡 新增模式：插入到数组开头并局部插入 DOM
-                        this.monitors.unshift(updatedMonitor);
-                        this.total++;
-                        
-                        // 更新分页状态
-                        this.totalPages = Math.ceil(this.total / this.pageSize);
-
-                        // 1. 主列表插入顶部
-                        const list = document.getElementById('monitorItems');
-                        if (list) {
-                            const card = document.createElement('div');
-                            card.className = 'glass monitor-card border border-white border-opacity-10';
-                            card.id = 'monitor-card-' + updatedMonitor.id;
-                            card.innerHTML = this.getMonitorCardHtml(updatedMonitor);
-                            list.prepend(card);
-
-                        }
-                        
-                        // 2. 侧边栏插入顶部
-                        const quickContainer = document.getElementById('quickMonitorItems');
-                        if (quickContainer) {
-                            // 如果是第一个监控项，先清空“暂无监控”提示
-                            if (this.monitors.length === 1) {
-                                quickContainer.innerHTML = '';
-                            }
-                            quickContainer.insertAdjacentHTML('afterbegin', this.getQuickMonitorHtml(updatedMonitor));
-
-                        }
-                        
-                        console.log(`[UI] New monitor ${updatedMonitor.id} prepended to DOM.`);
-                    }
-                    this.updateGlobalStats();
                 } else {
                     const data = await res.json();
                     alert(data.error || 'Failed to save monitor');
@@ -1372,18 +1382,6 @@
                 if (!confirm(this.lang === 'en' ? 'Delete this monitor?' : '确定删除此监控？')) return;
                 const res = await fetch('/api/monitors/' + id, { method: 'DELETE' });
                 if (res.ok) {
-                    // 💡 局部删除：从数组移除并删除 DOM
-                    this.monitors = this.monitors.filter(m => m.id !== id);
-                    this.total--;
-                    this.totalPages = Math.ceil(this.total / this.pageSize);
-                    
-                    const card = document.getElementById(`monitor-card-${id}`);
-                    if (card) card.remove();
-                    
-                    const sidebarItem = document.getElementById(`sidebar-item-${id}`);
-                    if (sidebarItem) sidebarItem.remove();
-                    
-                   this.updateGlobalStats();
                     console.log(`[UI] Monitor ${id} deleted locally.`);
                 }
             },
