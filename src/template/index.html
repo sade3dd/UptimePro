@@ -415,10 +415,17 @@
                     <div>
                         <div class="brand">UPTIME<span>PRO</span></div>
                         <div class="d-flex align-items-center gap-2">
-                            <span class="status-dot status-up"
+                            <span class="status-dot status-up" id="wsStatusDot"
                                 style="width: 8px; height: 8px; animation: pulse 2s infinite;"></span>
                             <span class="text-secondary small fw-bold text-uppercase tracking-wider"
                                 id="engineStatusText">Edge Monitoring Engine</span>
+                            <span class="mono" id="wsLastMsg" style="color: #10b981; font-size: 0.75rem; margin-left: 8px;"></span>
+                            <button onclick="app.reconnectWS()" class="btn btn-link text-secondary p-0 ms-1" id="wsReconnectBtn" title="Reconnect WS">
+                                <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
+                                        d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                                </svg>
+                            </button>
                         </div>
                     </div>
                     <div class="d-flex align-items-center gap-3">
@@ -653,7 +660,12 @@
                 prev: 'Previous',
                 next: 'Next',
                 page_info: 'Page {page} of {total}',
-                page_size: 'Page Size'
+                page_size: 'Page Size',
+                ws_connected: 'Connected',
+                ws_disconnected: 'Disconnected',
+                ws_connecting: 'Connecting',
+                ws_last_msg: '{time}',
+                ws_reconnect: 'Reconnect WebSocket'
             },
             cn: {
                 engine_status: '边缘监控引擎',
@@ -702,7 +714,12 @@
                 prev: '上一页',
                 next: '下一页',
                 page_info: '第 {page} 页，共 {total} 页',
-                page_size: '每页数量'
+                page_size: '每页数量',
+                ws_connected: '已连接',
+                ws_disconnected: '已断开',
+                ws_connecting: '正在连接',
+                ws_last_msg: '{time}',
+                ws_reconnect: '手动重连 WebSocket'
             }
         };
 
@@ -718,6 +735,7 @@
             total: 0,
             totalPages: 0,
             ws: null,
+            wsLastMsgTime: null,
             isInitialLoading: true,
             t(key, params = {}) {
                 let text = i18n[this.lang][key] || key;
@@ -763,6 +781,54 @@
 
                 const logoutBtns = document.querySelectorAll('button[onclick="app.logout()"]');
                 logoutBtns.forEach(btn => btn.textContent = this.t('logout'));
+
+                document.getElementById('wsReconnectBtn').title = this.t('ws_reconnect');
+                this.updateWSStatusUI();
+            },
+
+            updateWSStatusUI() {
+                const dot = document.getElementById('wsStatusDot');
+                const text = document.getElementById('engineStatusText');
+                const lastMsg = document.getElementById('wsLastMsg');
+
+                if (!dot || !text) return;
+
+                if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    dot.className = 'status-dot status-up';
+                    text.textContent = this.t('ws_connected');
+                    text.style.color = '#10b981';
+                } else if (this.ws && this.ws.readyState === WebSocket.CONNECTING) {
+                    dot.className = 'status-dot bg-warning';
+                    text.textContent = this.t('ws_connecting');
+                    text.style.color = '#fbbf24';
+                } else {
+                    dot.className = 'status-dot status-down';
+                    text.textContent = this.t('ws_disconnected');
+                    text.style.color = '#ef4444';
+                }
+
+                if (this.wsLastMsgTime) {
+                    const timeStr = new Date(this.wsLastMsgTime).toLocaleTimeString();
+                    lastMsg.textContent = this.t('ws_last_msg', { time: timeStr });
+                } else {
+                    lastMsg.textContent = '';
+                }
+            },
+
+            reconnectWS() {
+                console.log("[WS] 手动触发重连...");
+                if (this.ws) {
+                    this.ws.onclose = null;
+                    this.ws.onerror = null;
+                    this.ws.close();
+                    this.ws = null;
+                }
+                if (this.reconnectTimeout) {
+                    clearTimeout(this.reconnectTimeout);
+                    this.reconnectTimeout = null;
+                }
+                this.isConnecting = false;
+                this.connectWebSocket();
             },
 
             toggleLang() {
@@ -931,24 +997,34 @@
 
                 console.log("[WS] 正在尝试建立连接...");
                 this.ws = new WebSocket(wsUrl);
+                this.updateWSStatusUI();
 
                 this.ws.onopen = () => {
                     console.log("[WS] 连接成功 ✅");
+                    this.updateWSStatusUI();
                     this.reconnectAttempts = 0; // 如果你在类里定义了次数，就重置它
 
-                    // 2. 启动心跳
-                    this.heartbeatTimer = setInterval(() => {
-                        if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-                            // 发送简单的字符串或 JSON，取决于你后端的逻辑
-                            this.ws.send("ping");
-                        }
-                    }, 20000);
+                    // 2. 启动心跳  使用cf 自动心跳
+                    // 服务器端主动心跳：定期发送 ping 给所有连接
+                    // Cloudflare 官方推荐方式，保持连接活跃
+                    // this.heartbeatTimer = setInterval(() => {
+                    //     if (this.ws && this.ws.readyState === WebSocket.OPEN) {
+                    //         // 发送简单的字符串或 JSON，取决于你后端的逻辑
+                    //         this.ws.send("ping");
+                    //     }
+                    // }, 20000);
 
 
                 };
 
                 this.ws.onmessage = (event) => {
-                    if (event.data === "pong") return; // 忽略后端心跳回包
+                    this.wsLastMsgTime = Date.now();
+                    this.updateWSStatusUI();
+                    if (event.data === "ping") 
+                    {
+                        this.ws.send("pong");// 回复心跳
+                        return;
+                    }; 
                     try {
                         const data = JSON.parse(event.data);
                         if (data.type === 'add') {
@@ -1024,6 +1100,7 @@
                 this.ws.onclose = (e) => {
                     console.log("[WS] 连接关闭，30 秒后重连...");
                     this.isConnecting = false;
+                    this.updateWSStatusUI();
                     if (this.heartbeatTimer) clearInterval(this.heartbeatTimer);
 
                     // 3. 延迟重连，增加一个简单的防抖
@@ -1033,11 +1110,12 @@
                         if (!this.ws || this.ws.readyState === WebSocket.CLOSED) {
                             this.connectWebSocket();
                         }
-                    }, 30000);
+                    }, 10000);
                 };
 
                 this.ws.onerror = (err) => {
                     console.error("[WS] 发生错误", err);
+                    this.updateWSStatusUI();
                     // onerror 之后一般会触发 onclose，所以这里不需要额外写重连逻辑
                 };
             },
