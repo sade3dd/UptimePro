@@ -3,7 +3,7 @@
 一个轻量级、自托管的站点监控工具。基于 **Cloudflare Workers**、**Durable Objects** 和 **SQLite** 构建。
 
 ## 使用小号部署监控
-
+## 密码可以使用中文
 ## 密码等不要在仓库了修改，到 Cloudflare Workers 修改变量密钥。 密码需 大于 12 位
 
 ## ✨ 功能特性
