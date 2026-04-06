@@ -1446,7 +1446,7 @@ export const LOGIN_HTML = `<!DOCTYPE html>
       errorAlert.classList.add('d-none');
       
       const username = document.getElementById('username').value.trim();
-      const password = document.getElementById('password').value;
+      const password = document.getElementById('password').value.trim();
       const captcha = document.getElementById('captcha').value.trim().toLowerCase();
       
       if (!captchaId) {
