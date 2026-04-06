@@ -708,6 +708,7 @@
 
         const app = {
             monitors: [],
+            avgUptime: '100',
             logs: {},
             lang: localStorage.getItem('lang') || 'en',
             // --- 状态持久化优化 ---
@@ -860,6 +861,7 @@
                         data.monitors.forEach(m => {
                             if (m.logs) this.logs[m.id] = m.logs;
                         });
+                         this.avgUptime = data.avgUptime || '100';
 
                         currentPage++;
                     }
@@ -867,6 +869,7 @@
                     // 直接更新本地状态
                     this.monitors = allMonitors;
                     this.total = allMonitors.length;
+                   
 
                     // 执行初次渲染
                     this.renderAll();
@@ -889,13 +892,13 @@
             renderAll() {
                 this.renderQuickMonitors();
                 this.renderMonitors();
-                // 更新全局统计                
+                // 更新全局统计
                 this.updateGlobalStats();
 
             },
 
             updateGlobalStats() {
-                document.getElementById('avgUptime').innerHTML = (this.monitors.avgUptime || '---') + '<span class="fs-4 text-secondary">%</span>';
+                document.getElementById('avgUptime').innerHTML = (this.avgUptime || '---') + '<span class="fs-4 text-secondary">%</span>';
 
                 const up = this.monitors.filter(m => m.status === 'up').length;
                 const down = this.monitors.length - up;
@@ -952,6 +955,7 @@
                             // 💡 新增模式：插入到数组开头并局部插入 DOM
                             const updatedMonitor = data.monitor;
                             this.monitors.unshift(updatedMonitor);
+                            this.avgUptime = data.avgUptime || '100';
                             this.total++;
                             // 1. 主列表插入顶部
                             const list = document.getElementById('monitorItems');
@@ -978,6 +982,7 @@
 
                         } else if (data.type === 'update') {
                             const updatedMonitors = data.monitors;
+                            this.avgUptime = data.avgUptime || '100';
                             if (Array.isArray(updatedMonitors)) {
                                 updatedMonitors.forEach(m => {
                                     const id = m.id;
@@ -1001,6 +1006,7 @@
                             const id = data.id;  // ✅ 从 data.id 中获取
                             console.log(`[WS] Deleting monitor with id: ${id}`);
                             this.monitors = this.monitors.filter(m => m.id !== id);
+                            this.avgUptime = data.avgUptime || '100';
 
                             const card = document.getElementById(`monitor-card-${id}`);
                             if (card) card.remove();
