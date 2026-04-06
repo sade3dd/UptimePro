@@ -48,7 +48,7 @@ export class MonitorEngine extends DurableObject {
       }
     }
     this.initialized = true;
-    // ///console.log(`[DO] Database initialized with ${this.monitors.size} monitors.`);
+    // /console.log(`[DO] Database initialized with ${this.monitors.size} monitors.`);
   }
 
   async saveToSqlite() {
@@ -59,7 +59,7 @@ export class MonitorEngine extends DurableObject {
 
   async fetch(request: Request) {
     const url = new URL(request.url);
-    
+
     // 1. 权限校验（最快路径）
     if (request.headers.get("X-Intferfnal-Calla") !== this.env.SECURE_KEY) {
       return new Response("Forbidden", { status: 403 });
@@ -154,23 +154,57 @@ export class MonitorEngine extends DurableObject {
       this.monitors.set(id, newMonitor);
       await this.saveToSqlite();
       await this.state.storage.setAlarm(Date.now() + 1000);
-            // 💡 返回新创建的对象，方便前端局部更新
+      // 💡 返回新创建的对象，方便前端局部更新
       const { history24h, ...cleanMonitor } = newMonitor;
+      // 💡 广播新增监控
+      // 3. 计算统计数据并推送当前批次结果
+      const allMonitors = Array.from(this.monitors.values());
+      const total = allMonitors.length;
+      const upCount = allMonitors.filter(m => m.status === 'up').length;
+      const downCount = allMonitors.filter(m => m.status === 'down').length;
+      const totalUptime = allMonitors.reduce((acc, m) => acc + (m.uptime || 0), 0);
+      const avgUptime = total > 0 ? (totalUptime / total).toFixed(1) : '---';
+      await this.broadcast({
+        type: 'add',
+        total,
+        upCount,
+        downCount,
+        avgUptime,
+        monitor: cleanMonitor
+      });
+
       return Response.json({ success: true, monitor: cleanMonitor }, { headers: corsHeaders });
     }
 
     // API: 修改监控项
     if (url.pathname.startsWith("/api/monitors/") && request.method === "PUT") {
-         const id = url.pathname.split("/").pop();
+      const id = url.pathname.split("/").pop();
       if (id && this.monitors.has(id)) {
         const body = await request.json() as any;
         const monitor = this.monitors.get(id);
         const updatedMonitor = { ...monitor, ...body };
         this.monitors.set(id, updatedMonitor);
         await this.saveToSqlite();
-        
+
         // 💡 返回更新后的对象
         const { history24h, ...cleanMonitor } = updatedMonitor;
+        // 💡 广播更新监控
+        // 3. 计算统计数据并推送当前批次结果
+        const allMonitors = Array.from(this.monitors.values());
+        const total = allMonitors.length;
+        const upCount = allMonitors.filter(m => m.status === 'up').length;
+        const downCount = allMonitors.filter(m => m.status === 'down').length;
+        const totalUptime = allMonitors.reduce((acc, m) => acc + (m.uptime || 0), 0);
+        const avgUptime = total > 0 ? (totalUptime / total).toFixed(1) : '---';
+        await this.broadcast({
+          type: 'update',
+          total,
+          upCount,
+          downCount,
+          avgUptime,
+          monitors: [cleanMonitor]
+        });
+
         return Response.json({ success: true, monitor: cleanMonitor }, { headers: corsHeaders });
       }
       return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
@@ -182,6 +216,9 @@ export class MonitorEngine extends DurableObject {
       if (id && this.monitors.has(id)) {
         this.monitors.delete(id);
         await this.saveToSqlite();
+        // 💡 广播删除监控
+        await this.broadcast({ type: 'delete', id });
+
         return Response.json({ success: true }, { headers: corsHeaders });
       }
       return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
@@ -238,12 +275,12 @@ export class MonitorEngine extends DurableObject {
    */
   async alarm() {
     if (!this.initialized) {
-      //console.log('初始化数据库');
+      console.log('初始化数据库');
       await this.initTable();
       await this.state.storage.setAlarm(Date.now() + 3000);
       this.initialized = true;
     } else {
-      //console.log('数据库已初始化 ');
+      console.log('数据库已初始化 ');
     }
     const now = Date.now();
 
@@ -251,7 +288,7 @@ export class MonitorEngine extends DurableObject {
     const dueMonitors = Array.from(this.monitors.values()).filter(m => new Date(m.next_check).getTime() <= now).slice(0, 5);
 
     if (dueMonitors.length > 0) {
-      //console.log(`[MonitorEngine] 正在处理 ${dueMonitors.length} 个到期任务...`);
+      console.log(`[MonitorEngine] 正在处理 ${dueMonitors.length} 个到期任务...`);
 
       // 2. 并发执行
       // 2. 并发执行（带间隔）
@@ -272,20 +309,20 @@ export class MonitorEngine extends DurableObject {
       const avgUptime = total > 0 ? (totalUptime / total).toFixed(1) : '---';
       this.broadcast({
         type: 'update',
-        monitors: dueMonitors.map(monitor => {
-          const { history24h, ...cleanMonitor } = monitor;
-          return cleanMonitor;
-        }),
         total,
         upCount,
         downCount,
-        avgUptime
+        avgUptime,
+        monitors: dueMonitors.map(monitor => {
+          const { history24h, ...cleanMonitor } = monitor;
+          return cleanMonitor;
+        })
       });
       // 4. 链式调用：检查是否还有剩余到期任务
       const remaining = allMonitors.filter(m => new Date(m.next_check).getTime() <= now).length;
 
       if (remaining > 0) {
-        //console.log(`[MonitorEngine] 还有 ${remaining} 个任务等待处理，1秒后继续...`);
+        console.log(`[MonitorEngine] 还有 ${remaining} 个任务等待处理，1秒后继续...`);
         await this.state.storage.setAlarm(Date.now() + 1000);
         return;
       }
@@ -307,12 +344,12 @@ export class MonitorEngine extends DurableObject {
       const nextTime = new Date(nextTask.next_check).getTime();
       const delay = Math.min(60000, Math.max(10000, nextTime - now)); // 最长60秒
       const nextTimeStr = new Date(Date.now() + delay).toLocaleString();
-      //console.log(`[MonitorEngine] 无即时任务，下次任务在 ${nextTimeStr}`);
+      console.log(`[MonitorEngine] 无即时任务，下次任务在 ${nextTimeStr}`);
       await this.state.storage.setAlarm(Date.now() + delay);
     } else {
       // 彻底没任务，30秒后醒来检查一次（保活）
       const nextTimeStr = new Date(Date.now() + 30000).toLocaleString();
-      //console.log(`[MonitorEngine] 无任务，30秒后检查（保活） ${nextTimeStr}`);
+      console.log(`[MonitorEngine] 无任务，30秒后检查（保活） ${nextTimeStr}`);
       await this.state.storage.setAlarm(Date.now() + 30000);
     }
   }
@@ -328,7 +365,7 @@ export class MonitorEngine extends DurableObject {
     let errorMessage = "";
 
     try {
-      //console.log(`[Monitor] 开始检查 ${monitor.url}`);
+      console.log(`[Monitor] 开始检查 ${monitor.url}`);
 
       // ============================
       // 0. 检查是否为 IP 地址 (Workers 不支持直接 IP 监控)
@@ -488,9 +525,9 @@ export class MonitorEngine extends DurableObject {
       if (!success) {
         const text = await res.text().catch(() => "");
         errorMessage = `HTTP ${statusCode}`;
-        //console.log(`[Monitor] ${monitor.url} - ${statusCode} (${latency}ms) ${text} - FAIL`);
+        console.log(`[Monitor] ${monitor.url} - ${statusCode} (${latency}ms) ${text} - FAIL`);
       } else {
-        //console.log(`[Monitor] ${monitor.url} - ${statusCode} (${latency}ms) - OK`);
+        console.log(`[Monitor] ${monitor.url} - ${statusCode} (${latency}ms) - OK`);
       }
 
     } catch (e: any) {
@@ -573,7 +610,7 @@ export class MonitorEngine extends DurableObject {
     let socket: any = null;
 
     try {
-      //console.log(`[Monitor] 开始 TCP 检查 ${monitor.url}`);
+      console.log(`[Monitor] 开始 TCP 检查 ${monitor.url}`);
 
       let host = "";
       let port = 0;
@@ -601,7 +638,7 @@ export class MonitorEngine extends DurableObject {
       await Promise.race([socket.opened, timeoutPromise]);
 
       success = true;
-      //console.log(`[Monitor] TCP ${host}:${port} - OK`);
+      console.log(`[Monitor] TCP ${host}:${port} - OK`);
     } catch (e: any) {
       success = false;
       errorMessage = e.message || "TCP Connection Error";
@@ -740,12 +777,12 @@ export class MonitorEngine extends DurableObject {
     const wssObj = this.env.WS_ENGINE.get(wssId);
     await wssObj.fetch(new Request("http://internal/broadcast", {
       method: "POST",
-      headers: { 
+      headers: {
         "Content-Type": "application/json",
         "X-Intferfnal-Calla": this.env.SECURE_KEY || "IsC3jy5A1axaCxX3I8mP8fE7sjfHiKGQe1Mi"
       },
       body: JSON.stringify(data)
-    })).catch(() => {});
+    })).catch(() => { });
 
-}
+  }
 }
