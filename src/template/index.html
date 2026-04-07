@@ -1373,46 +1373,79 @@
             },
 
             async addMonitor() {
-                const id = document.getElementById('m_id').value;
-                const name = document.getElementById('m_name').value;
-                const url = document.getElementById('m_url').value;
-                const type = document.getElementById('m_type').value;
-                const method = document.getElementById('m_method').value;
-                const interval = parseInt(document.getElementById('m_interval').value);
-                const headers_str = document.getElementById('m_headers').value;
-                const body = document.getElementById('m_body').value;
-                const body_type = document.getElementById('m_body_type').value;
-                const notify = document.getElementById('m_notify').checked;
+                const initBtn = document.getElementById('initBtn');
+                const originalText = initBtn.textContent;
+                
+                // 1. 防止重复点击：禁用按钮并显示加载中
+                initBtn.disabled = true;
+                initBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Saving...';
 
-                const payload = { name, url, type, method, interval, notify, body, body_type };
-                if (headers_str) {
-                    try {
-                        payload.headers = JSON.parse(headers_str);
-                    } catch (e) {
-                        alert('Headers JSON 格式错误');
+                try {
+                    const id = document.getElementById('m_id').value;
+                    const name = document.getElementById('m_name').value;
+                    const url = document.getElementById('m_url').value;
+                    const type = document.getElementById('m_type').value;
+                    const method = document.getElementById('m_method').value;
+                    const interval = parseInt(document.getElementById('m_interval').value);
+                    const headers_str = document.getElementById('m_headers').value;
+                    const body = document.getElementById('m_body').value;
+                    const body_type = document.getElementById('m_body_type').value;
+                    const notify = document.getElementById('m_notify').checked;
+
+                    if (!name || !url) {
+                        alert(this.lang === 'en' ? 'Name and URL are required' : '名称和地址不能为空');
                         return;
                     }
-                }
 
-                const res = await fetch(id ? '/api/monitors/' + id : '/api/monitors', {
-                    method: id ? 'PUT' : 'POST',
-                    body: JSON.stringify(payload)
-                });
+                    const payload = { name, url, type, method, interval, notify, body, body_type };
+                    if (headers_str) {
+                        try {
+                            payload.headers = JSON.parse(headers_str);
+                        } catch (e) {
+                            alert('Headers JSON 格式错误');
+                            return;
+                        }
+                    }
+                   // --- [测试用] 模拟网络延迟 1.5秒 ---
+                    // 在真实环境中请删除或注释掉下面这行
+                    // await new Promise(resolve => setTimeout(resolve, 1500)); 
+                    const res = await fetch(id ? '/api/monitors/' + id : '/api/monitors', {
+                        method: id ? 'PUT' : 'POST',
+                        headers: { 'Content-Type': 'application/json' }, // 确保发送 JSON 头
+                        body: JSON.stringify(payload)
+                    });
 
-                if (res.ok) {
-                    const data = await res.json();
-                    const updatedMonitor = data.monitor;
-
-                    bootstrap.Modal.getInstance(document.getElementById('addMonitorModal')).hide();
-                    document.getElementById('addMonitorForm').reset();
-                    document.getElementById('m_id').value = '';
-
-                } else {
-                    const data = await res.json();
-                    alert(data.error || 'Failed to save monitor');
+                    if (res.ok) {
+                        // 2. 成功：关闭模态框
+                        // 注意：我们不在这里手动更新 UI，而是等待 WebSocket 的 'add' 消息来统一更新
+                        // 这样可以保证所有客户端视图一致
+                        const modalEl = document.getElementById('addMonitorModal');
+                        const modal = bootstrap.Modal.getInstance(modalEl);
+                        if (modal) {
+                            modal.hide();
+                        }
+                        
+                        // 重置表单将在 'hidden.bs.modal' 事件中处理，或者在这里手动调用
+                        document.getElementById('addMonitorForm').reset();
+                        document.getElementById('m_id').value = '';
+                        
+                        // 恢复按钮状态（虽然模态框关了，但为了保险起见）
+                        initBtn.disabled = false;
+                        initBtn.textContent = originalText;
+                    } else {
+                        const data = await res.json();
+                        alert(data.error || 'Failed to save monitor');
+                        // 失败时恢复按钮
+                        initBtn.disabled = false;
+                        initBtn.textContent = originalText;
+                    }
+                } catch (e) {
+                    console.error(e);
+                    alert('Network error');
+                    initBtn.disabled = false;
+                    initBtn.textContent = originalText;
                 }
             },
-
             editMonitor(id) {
                 const m = this.monitors.find(m => m.id == id);
                 if (!m) return;
