@@ -1403,6 +1403,9 @@
                             payload.headers = JSON.parse(headers_str);
                         } catch (e) {
                             alert('Headers JSON 格式错误');
+                             // 【关键修复】在返回前恢复按钮状态
+                            initBtn.disabled = false;
+                            initBtn.textContent = originalText;
                             return;
                         }
                     }
