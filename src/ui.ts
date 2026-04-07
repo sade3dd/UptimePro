@@ -925,6 +925,9 @@ export const INDEX_HTML = `
                         payload.headers = JSON.parse(headers_str);
                     } catch (e) {
                         alert('Headers JSON 格式错误');
+                             // 【关键修复】在返回前恢复按钮状态
+                            initBtn.disabled = false;
+                            initBtn.textContent = originalText;
                         return; // 校验失败直接返回，按钮保持禁用状态不太好，建议在这里也恢复，或者依靠下面的 finally
                     }
                 }
