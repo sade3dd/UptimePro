@@ -237,7 +237,7 @@ export const INDEX_HTML = `
             border-color: #059669 !important;
             box-shadow: 0 0 0 0.25rem rgba(16, 185, 129, 0.25);
         }
-        
+    
     </style>
 </head>
 <body>
@@ -901,40 +901,88 @@ export const INDEX_HTML = `
             },
 
             async addMonitor() {
-                const id = document.getElementById('m_id').value;
-                const name = document.getElementById('m_name').value;
-                const url = document.getElementById('m_url').value;
-                const type = document.getElementById('m_type').value;
-                const method = document.getElementById('m_method').value;
-                const interval = parseInt(document.getElementById('m_interval').value);
-                const headers_str = document.getElementById('m_headers').value;
-                const body = document.getElementById('m_body').value;
-                const body_type = document.getElementById('m_body_type').value;
-                const notify = document.getElementById('m_notify').checked;
-
-                const payload = { name, url, type, method, interval, notify, body, body_type };
-                if (headers_str) {
-                    try {
-                        payload.headers = JSON.parse(headers_str);
-                    } catch (e) {
-                        alert('Headers JSON 格式错误');
-                        return;
-                    }
+                const initBtn = document.getElementById('initBtn');
+                // 保存原始文本，以便恢复（考虑到多语言，最好重新获取或硬编码，这里简单处理）
+                const originalText = this.t('initialize'); 
+                
+                // 1. 防止重复点击：禁用按钮并显示加载中
+                if (initBtn) {
+                    initBtn.disabled = true;
+                    initBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Saving...';
                 }
 
-                const res = await fetch(id ? '/api/monitors/' + id : '/api/monitors', {
-                    method: id ? 'PUT' : 'POST',
-                    body: JSON.stringify(payload)
-                });
+                try {
+                    const id = document.getElementById('m_id').value;
+                    const name = document.getElementById('m_name').value;
+                    const url = document.getElementById('m_url').value;
+                    const type = document.getElementById('m_type').value;
+                    const method = document.getElementById('m_method').value;
+                    const interval = parseInt(document.getElementById('m_interval').value);
+                    const headers_str = document.getElementById('m_headers').value;
+                    const body = document.getElementById('m_body').value;
+                    const body_type = document.getElementById('m_body_type').value;
+                    const notify = document.getElementById('m_notify').checked;
 
-                if (res.ok) {
-                    bootstrap.Modal.getInstance(document.getElementById('addMonitorModal')).hide();
-                    document.getElementById('addMonitorForm').reset();
-                    document.getElementById('m_id').value = '';
-                    this.fetchMonitors();
-                } else {
-                    const data = await res.json();
-                    alert(data.error || 'Failed to save monitor');
+                    // 基本校验
+                    if (!name || !url) {
+                        alert(this.lang === 'en' ? 'Name and URL are required' : '名称和地址不能为空');
+                        return; // 注意：这里 return 前需要恢复按钮，或者让外层 catch 处理，但因为是同步校验，最好手动恢复
+                        if (initBtn) {
+                            initBtn.disabled = false;
+                            initBtn.textContent = originalText;
+                        }
+                        return;
+                    }
+
+                    const payload = { name, url, type, method, interval, notify, body, body_type };
+                    if (headers_str) {
+                        try {
+                            payload.headers = JSON.parse(headers_str);
+                        } catch (e) {
+                            alert('Headers JSON 格式错误');
+                            if (initBtn) {
+                                initBtn.disabled = false;
+                                initBtn.textContent = originalText;
+                            }
+                            return;
+                        }
+                    }
+
+                    // --- [测试用] 如果需要模拟延迟，取消下面这行的注释 ---
+                    // await new Promise(resolve => setTimeout(resolve, 1500)); 
+
+                    const res = await fetch(id ? '/api/monitors/' + id : '/api/monitors', {
+                        method: id ? 'PUT' : 'POST',
+                        headers: { 'Content-Type': 'application/json' }, // 确保发送 JSON 头
+                        body: JSON.stringify(payload)
+                    });
+
+                    if (res.ok) {
+                        // 2. 成功：关闭模态框
+                        // 注意：不再手动调用 fetchMonitors，依赖 WebSocket 的 'add' 消息更新 UI，避免闪烁和重复请求
+                        const modalEl = document.getElementById('addMonitorModal');
+                        const modal = bootstrap.Modal.getInstance(modalEl);
+                        if (modal) {
+                            modal.hide();
+                        }
+                        
+                        // 重置表单
+                        document.getElementById('addMonitorForm').reset();
+                        document.getElementById('m_id').value = '';
+                        
+                    } else {
+                        const data = await res.json();
+                        alert(data.error || 'Failed to save monitor');
+                    }
+                } catch (e) {
+                    console.error(e);
+                    alert('Network error: ' + e.message);
+                } finally {
+                    // 3. 无论成功失败，都恢复按钮状态
+                    if (initBtn) {
+                        initBtn.disabled = false;
+                        initBtn.textContent = originalText;
+                    }
                 }
             },
 
