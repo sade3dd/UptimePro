@@ -237,7 +237,7 @@
         }
 
         #upCount {
-            color: #34d399 !important;
+            color: #059669 !important;
         }
 
         #downCount {
@@ -261,7 +261,7 @@
         }
 
         .monitor-card h4 {
-            color: #27da17;
+            color: #1caf0f;
         }
 
         .monitor-card .latency-label {
@@ -419,8 +419,10 @@
                                 style="width: 8px; height: 8px; animation: pulse 2s infinite;"></span>
                             <span class="text-secondary small fw-bold text-uppercase tracking-wider"
                                 id="engineStatusText">Edge Monitoring Engine</span>
-                            <span class="mono" id="wsLastMsg" style="color: #10b981; font-size: 0.75rem; margin-left: 8px;"></span>
-                            <button onclick="app.reconnectWS()" class="btn btn-link text-secondary p-0 ms-1" id="wsReconnectBtn" title="Reconnect WS">
+                            <span class="mono" id="wsLastMsg"
+                                style="color: #10b981; font-size: 0.75rem; margin-left: 8px;"></span>
+                            <button onclick="app.reconnectWS()" class="btn btn-link text-secondary p-0 ms-1"
+                                id="wsReconnectBtn" title="Reconnect WS">
                                 <svg width="12" height="12" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                                     <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2"
                                         d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
@@ -927,7 +929,7 @@
                         data.monitors.forEach(m => {
                             if (m.logs) this.logs[m.id] = m.logs;
                         });
-                         this.avgUptime = data.avgUptime || '100';
+                        this.avgUptime = data.avgUptime || '100';
 
                         currentPage++;
                     }
@@ -935,7 +937,7 @@
                     // 直接更新本地状态
                     this.monitors = allMonitors;
                     this.total = allMonitors.length;
-                   
+
 
                     // 执行初次渲染
                     this.renderAll();
@@ -1020,11 +1022,10 @@
                 this.ws.onmessage = (event) => {
                     this.wsLastMsgTime = Date.now();
                     this.updateWSStatusUI();
-                    if (event.data === "ping") 
-                    {
+                    if (event.data === "ping") {
                         this.ws.send("pong");// 回复心跳
                         return;
-                    }; 
+                    };
                     try {
                         const data = JSON.parse(event.data);
                         if (data.type === 'add') {
@@ -1059,23 +1060,56 @@
                         } else if (data.type === 'update') {
                             const updatedMonitors = data.monitors;
                             this.avgUptime = data.avgUptime || '100';
-                            if (Array.isArray(updatedMonitors)) {
-                                updatedMonitors.forEach(m => {
-                                    const id = m.id;
-                                    if (m.logs) this.logs[id] = m.logs;
-                                    const index = this.monitors.findIndex(item => item.id === id);
-                                    if (index !== -1) {
-                                        this.monitors[index] = { ...this.monitors[index], ...m };
-                                        this.updateMonitorCard(id);
-                                    }
-                                });
-                            }
-                            // 更新统计数据
+
+                            // 更新全局统计数据
                             if (data.upCount !== undefined) document.getElementById('upCount').textContent = data.upCount;
                             if (data.downCount !== undefined) document.getElementById('downCount').textContent = data.downCount;
                             if (data.avgUptime !== undefined) {
                                 document.getElementById('avgUptime').innerHTML = data.avgUptime + '<span class="fs-4 text-secondary">%</span>';
                             }
+
+                            if (Array.isArray(updatedMonitors)) {
+                                updatedMonitors.forEach(m => {
+                                    const id = m.id;
+                                    if (m.logs) this.logs[id] = m.logs;
+
+                                    const index = this.monitors.findIndex(item => item.id === id);
+
+                                    if (index !== -1) {
+                                        // ✅ 情况 A: 监控项已存在 -> 局部更新
+                                        this.monitors[index] = { ...this.monitors[index], ...m };
+                                        this.updateMonitorCard(id);
+                                    } else {
+                                        // ✅ 情况 B: 监控项不存在 (兜底逻辑) -> 执行新增模式
+                                        console.log(`[WS] Update received for unknown ID ${id}, treating as ADD.`);
+
+                                        // 1. 插入到数组开头
+                                        this.monitors.unshift(m);
+
+                                        // 2. 主列表插入顶部
+                                        const list = document.getElementById('monitorItems');
+                                        if (list) {
+                                            const card = document.createElement('div');
+                                            card.className = 'glass monitor-card border border-white border-opacity-10';
+                                            card.id = 'monitor-card-' + id;
+                                            card.innerHTML = this.getMonitorCardHtml(m);
+                                            list.prepend(card);
+                                        }
+
+                                        // 3. 侧边栏插入顶部
+                                        const quickContainer = document.getElementById('quickMonitorItems');
+                                        if (quickContainer) {
+                                            // 如果是第一个监控项，先清空提示
+                                            if (this.monitors.length === 1) {
+                                                quickContainer.innerHTML = '';
+                                            }
+                                            quickContainer.insertAdjacentHTML('afterbegin', this.getQuickMonitorHtml(m));
+                                        }
+                                    }
+                                });
+                            }
+
+                            // 无论更新还是新增，都刷新一下侧边栏以确保排序或状态一致
                             this.renderQuickMonitors();
                         } else if (data.type === 'delete') {
                             // 💡 局部删除：从数组移除并删除 DOM
@@ -1200,9 +1234,9 @@
                 return `<div class="sidebar-item d-flex align-items-center gap-2 p-2 rounded-2 mono" id="sidebar-item-${m.id}" onclick="app.showMonitorDetail('${m.id}')">` +
                     `<div class="d-flex align-items-center gap-1 px-1" style="background: rgba(0,0,0,0.2); border-radius: 4px; border: 1px solid rgba(255,255,255,0.05);">` +
                     `<div class="status-dot ${statusClass}" style="width: 6px; height: 6px; flex-shrink: 0;"></div>` +
-                    `<span class="${rateColorClass}" style="font-size: 0.7rem;">${uptime}%</span>` +
+                    `<span class="${rateColorClass} small text-truncate flex-grow-1 fw-bold" style="font-size: 0.9rem;">${uptime}%</span>` +
                     `</div>` +
-                    `<div class="text-white small text-truncate flex-grow-1 fw-bold" style="font-size: 0.75rem;">${m.name}</div>` +
+                    `<div class="small text-truncate flex-grow-1 fw-bold" style="font-size: 0.9rem;color: #b1b8c0;">${m.name}</div>` +
                     `<div class="d-flex gap-1 align-items-center" style="flex-shrink: 0; background: rgba(0,0,0,0.3); padding: 2px; border-radius: 3px;">` +
                     miniBar +
                     `</div>` +
@@ -1375,7 +1409,7 @@
             async addMonitor() {
                 const initBtn = document.getElementById('initBtn');
                 const originalText = initBtn.textContent;
-                
+
                 // 1. 防止重复点击：禁用按钮并显示加载中
                 initBtn.disabled = true;
                 initBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Saving...';
@@ -1403,13 +1437,13 @@
                             payload.headers = JSON.parse(headers_str);
                         } catch (e) {
                             alert('Headers JSON 格式错误');
-                             // 【关键修复】在返回前恢复按钮状态
+                            // 【关键修复】在返回前恢复按钮状态
                             initBtn.disabled = false;
                             initBtn.textContent = originalText;
                             return;
                         }
                     }
-                   // --- [测试用] 模拟网络延迟 1.5秒 ---
+                    // --- [测试用] 模拟网络延迟 1.5秒 ---
                     // 在真实环境中请删除或注释掉下面这行
                     // await new Promise(resolve => setTimeout(resolve, 1500)); 
                     const res = await fetch(id ? '/api/monitors/' + id : '/api/monitors', {
@@ -1427,11 +1461,11 @@
                         if (modal) {
                             modal.hide();
                         }
-                        
+
                         // 重置表单将在 'hidden.bs.modal' 事件中处理，或者在这里手动调用
                         document.getElementById('addMonitorForm').reset();
                         document.getElementById('m_id').value = '';
-                        
+
                         // 恢复按钮状态（虽然模态框关了，但为了保险起见）
                         initBtn.disabled = false;
                         initBtn.textContent = originalText;
