@@ -153,7 +153,7 @@ export class MonitorEngine extends DurableObject {
       };
       this.monitors.set(id, newMonitor);
       await this.saveToSqlite();
-      await this.state.storage.setAlarm(Date.now() + 1000);
+      this.state.storage.setAlarm(Date.now() + 1000);
       // 💡 返回新创建的对象，方便前端局部更新
       const { history24h, ...cleanMonitor } = newMonitor;
       // 💡 广播新增监控
@@ -180,11 +180,18 @@ export class MonitorEngine extends DurableObject {
     if (url.pathname.startsWith("/api/monitors/") && request.method === "PUT") {
       const id = url.pathname.split("/").pop();
       if (id && this.monitors.has(id)) {
-        const body = await request.json() as any;
+        const body = await request.json() as any;      
+         // 1. 规范化 notify 字段
+        if (body.notify !== undefined) {
+          body.notify = body.notify ? 1 : 0;
+        }
+
+        body.next_check = new Date().toISOString();
         const monitor = this.monitors.get(id);
         const updatedMonitor = { ...monitor, ...body };
         this.monitors.set(id, updatedMonitor);
         await this.saveToSqlite();
+        this.state.storage.setAlarm(Date.now() + 1000);
 
         // 💡 返回更新后的对象
         const { history24h, ...cleanMonitor } = updatedMonitor;
@@ -204,7 +211,7 @@ export class MonitorEngine extends DurableObject {
           avgUptime,
           monitors: [cleanMonitor]
         });
-
+        
         return Response.json({ success: true, monitor: cleanMonitor }, { headers: corsHeaders });
       }
       return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
@@ -362,7 +369,9 @@ export class MonitorEngine extends DurableObject {
     let success = false;
     const start = Date.now();
     let statusCode = 0;
-    let errorMessage = "";
+    let errorMessage = "";   
+    // 【新增】1. 在检查前记录旧状态
+    const oldStatus = monitor.status;
 
     try {
       console.log(`[Monitor] 开始检查 ${monitor.url}`);
@@ -596,7 +605,7 @@ export class MonitorEngine extends DurableObject {
     // ============================
     // 8. 状态变更通知
     // ============================
-    if (monitor.status !== "unknown" && monitor.status !== newStatus && monitor.notify === 1) {
+    if (oldStatus !== "unknown" && oldStatus !== newStatus && monitor.notify) {
       this.sendNotification(monitor, newStatus, statusCode, errorMessage).catch(e => {
         //console.error("[MonitorEngine] 通知发送失败:", e);
       });
@@ -608,7 +617,8 @@ export class MonitorEngine extends DurableObject {
     const start = Date.now();
     let errorMessage = "";
     let socket: any = null;
-
+    // 【新增】1. 在检查前记录旧状态
+    const oldStatus = monitor.status;
     try {
       console.log(`[Monitor] 开始 TCP 检查 ${monitor.url}`);
 
@@ -708,7 +718,7 @@ export class MonitorEngine extends DurableObject {
     // ============================
     // 状态变更通知
     // ============================
-    if (monitor.status !== "unknown" && monitor.status !== newStatus && monitor.notify === 1) {
+    if (oldStatus !== "unknown" && oldStatus !== newStatus && monitor.notify) {
       this.sendNotification(monitor, newStatus, success ? 200 : 0, errorMessage).catch(e => {
         //console.error("[MonitorEngine] 通知发送失败:", e);
       });
