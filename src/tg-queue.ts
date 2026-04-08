@@ -180,7 +180,11 @@ export class MonitorEngine extends DurableObject {
     if (url.pathname.startsWith("/api/monitors/") && request.method === "PUT") {
       const id = url.pathname.split("/").pop();
       if (id && this.monitors.has(id)) {
-        const body = await request.json() as any;      
+        const body = await request.json() as any;   
+        // 确保 headers 是 JSON 字符串
+        if (body.headers && typeof body.headers === 'object') {
+        body.headers = JSON.stringify(body.headers);
+        }
          // 1. 规范化 notify 字段
         if (body.notify !== undefined) {
           body.notify = body.notify ? 1 : 0;
