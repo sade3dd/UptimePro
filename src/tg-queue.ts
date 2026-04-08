@@ -177,6 +177,11 @@ export class MonitorEngine extends DurableObject {
         if (body.headers && typeof body.headers === 'object') {
           body.headers = JSON.stringify(body.headers);
         }
+        // 1. 规范化 notify 字段
+        if (body.notify !== undefined) {
+          body.notify = body.notify ? 1 : 0;
+        }
+
         const monitor = this.monitors.get(id);
         this.monitors.set(id, { ...monitor, ...body });
         await this.saveToSqlite();
@@ -337,7 +342,8 @@ export class MonitorEngine extends DurableObject {
     const start = Date.now();
     let statusCode = 0;
     let errorMessage = "";
-
+    // 【新增】1. 在检查前记录旧状态
+    const oldStatus = monitor.status;
     try {
       console.log(`[Monitor] 开始检查 ${monitor.url}`);
 
@@ -570,7 +576,7 @@ export class MonitorEngine extends DurableObject {
     // ============================
     // 8. 状态变更通知
     // ============================
-    if (monitor.status !== "unknown" && monitor.status !== newStatus && monitor.notify === 1) {
+    if (oldStatus !== "unknown" && oldStatus !== newStatus && monitor.notify) {
       this.sendNotification(monitor, newStatus, statusCode, errorMessage).catch(e => {
         console.error("[MonitorEngine] 通知发送失败:", e);
       });
@@ -582,7 +588,8 @@ export class MonitorEngine extends DurableObject {
     const start = Date.now();
     let errorMessage = "";
     let socket: any = null;
-
+    // 【新增】1. 在检查前记录旧状态
+    const oldStatus = monitor.status;
     try {
       console.log(`[Monitor] 开始 TCP 检查 ${monitor.url}`);
 
@@ -682,7 +689,7 @@ export class MonitorEngine extends DurableObject {
     // ============================
     // 状态变更通知
     // ============================
-    if (monitor.status !== "unknown" && monitor.status !== newStatus && monitor.notify === 1) {
+    if (oldStatus !== "unknown" && oldStatus !== newStatus && monitor.notify) {
       this.sendNotification(monitor, newStatus, success ? 200 : 0, errorMessage).catch(e => {
         console.error("[MonitorEngine] 通知发送失败:", e);
       });
