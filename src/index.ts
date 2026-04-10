@@ -11,7 +11,7 @@ export interface Env {
   JWT_SECRET?: string;
   CAPTCHA_SALT?: string;
   SECURE_KEY?: string;
-
+  PROBE_KEY?: string;
 }
 
 export default {
@@ -60,7 +60,7 @@ export default {
     }
 
     // 排除内部触发和公开路由
-    if (url.pathname !== "/internal/trigger") {
+    if (url.pathname !== "/internal/trigger" && url.pathname !== "/probe") {
       const jwtSecret = env.JWT_SECRET || 'k1PtweQ69UBRzdOIla2n6AJf9ovp3TvFBhvbeUIOxSmCEPOvQwfRGBuzeaHwKfjNIJb7JtaEruvYkjPUp5eZpZ';
       const authenticated = await isAuthenticated(request, jwtSecret);
       if (!authenticated) {
@@ -70,6 +70,26 @@ export default {
         }
         console.log("未认证请求", url.pathname);
         return Response.redirect(new URL("/login", request.url).toString(), 302);
+      }
+    }
+
+    // 针对 /probe 的防爆破与安全验证 (握手阶段)
+    if (url.pathname === "/probe") {
+      const id = url.searchParams.get("id");
+      const key = url.searchParams.get("key");
+      const ip = request.headers.get("CF-Connecting-IP") || "unknown";
+      
+      const monitorId = env.MONITOR_ENGINE.idFromName("global_monitor");
+      const monitorObj = env.MONITOR_ENGINE.get(monitorId);
+      
+      // 调用 MonitorEngine 进行统一的频率限制和密钥验证
+      const verifyRes = await monitorObj.fetch(new Request(`http://internal/internal/verify-probe?id=${id}&key=${key}&ip=${ip}`, {
+        headers: { "X-Intferfnal-Calla": env.SECURE_KEY || "IsC3jy5A1axaCxX3I8mP8fE7sjfHiKGQe1Mi" }
+      }));
+      
+      if (verifyRes.status !== 200) {
+        // 如果验证不通过 (401, 404, 429)，直接拒绝握手
+        return verifyRes;
       }
     }
 
@@ -85,6 +105,7 @@ export default {
       newRequest.headers.set("X-Intferfnal-Calla", env.SECURE_KEY || "IsC3jy5A1axaCxX3I8mP8fE7sjfHiKGQe1Mi");
       return wssObj.fetch(newRequest);
     }
+
     // 处理 API 请求
     if (url.pathname.startsWith("/api/")) {
       return obj.fetch(
