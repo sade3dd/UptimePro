@@ -105,6 +105,11 @@
             box-shadow: 0 0 15px rgba(239, 68, 68, 0.5);
         }
 
+        .status-unknown {
+            background-color: #4b5563;
+            box-shadow: 0 0 15px rgba(75, 85, 99, 0.5);
+        }
+
         .uptime-bar {
             display: flex;
             gap: 2px;
@@ -264,7 +269,20 @@
             color: #1caf0f;
         }
 
-        .monitor-card .latency-label {
+        /* Server Monitor Styles */
+        .server-stat-bar {
+            height: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .server-stat-progress {
+            height: 100%;
+            transition: width 0.5s ease;
+        }
+
+        .latency-label {
             color: #a1a1aa !important;
         }
 
@@ -513,6 +531,19 @@
                 <div class="modal-body">
                     <form id="addMonitorForm">
                         <input type="hidden" id="m_id">
+                        <div class="row g-3 mb-4 d-none" id="serverInfoContainer">
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1">Monitor ID (UUID)</label>
+                                <div class="input-group">
+                                    <input type="text" id="m_display_id" class="form-control mono" readonly>
+                                    <button class="btn btn-outline-secondary" type="button" onclick="app.regenerateId()">Regen</button>
+                                </div>
+                            </div>
+                            <div class="col-md-6">
+                                <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1">Probe Key</label>
+                                <input type="text" id="m_display_key" class="form-control mono" readonly>
+                            </div>
+                        </div>
                         <div class="row g-3 mb-4">
                             <div class="col-md-8">
                                 <label
@@ -528,16 +559,17 @@
                                 <select id="m_type" class="form-select">
                                     <option value="http" id="optHttp">HTTP/HTTPS</option>
                                     <option value="tcp" id="optTcp">TCP Port</option>
+                                    <option value="server" id="optServer">System Monitor (Probe)</option>
                                 </select>
                             </div>
                         </div>
-                        <div class="row g-3 mb-4">
+                        <div class="row g-3 mb-4" id="urlContainer">
                             <div class="col-md-8">
                                 <label
                                     class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1"
                                     id="labelUrl">Target Endpoint</label>
                                 <input type="url" id="m_url" class="form-control mono"
-                                    placeholder="https://api.example.com/v1" required>
+                                    placeholder="https://api.example.com/v1">
                                 <div class="small text-warning mt-1 ms-1" id="ipHint" style="font-size: 0.7rem;">
                                 </div>
                             </div>
@@ -553,7 +585,25 @@
                                 </select>
                             </div>
                         </div>
-                        <div class="mb-4">
+                        <div id="serverConfigContainer" class="mb-4 d-none">
+                            <div class="d-flex justify-content-between align-items-center mb-2">
+                                <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1 mb-0">Probe Startup Command</label>
+                                <div class="btn-group btn-group-sm" role="group">
+                                    <input type="radio" class="btn-check" name="osType" id="osLinux" value="linux" checked onchange="app.updateProbeCommand()">
+                                    <label class="btn btn-outline-emerald" for="osLinux">Linux</label>
+                                    <input type="radio" class="btn-check" name="osType" id="osMac" value="mac" onchange="app.updateProbeCommand()">
+                                    <label class="btn btn-outline-emerald" for="osMac">macOS</label>
+                                    <input type="radio" class="btn-check" name="osType" id="osWin" value="win" onchange="app.updateProbeCommand()">
+                                    <label class="btn btn-outline-emerald" for="osWin">Windows</label>
+                                </div>
+                            </div>
+                            <div class="glass p-3 rounded-3 position-relative">
+                                <code id="probeCommand" class="small text-info mono break-all"></code>
+                                <button type="button" onclick="app.copyProbeCommand()" class="btn btn-sm btn-outline-emerald position-absolute top-0 end-0 m-2">Copy</button>
+                            </div>
+                            <div class="small text-secondary mt-2">Run this command on your server to start monitoring.</div>
+                        </div>
+                        <div class="mb-4" id="headersContainer">
                             <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1"
                                 id="labelHeaders">Custom Headers (JSON)</label>
                             <textarea id="m_headers" class="form-control mono" rows="2"
@@ -580,7 +630,7 @@
                                 placeholder='{"key": "value"}'></textarea>
                         </div>
                         <div class="row g-3 mb-4 align-items-end">
-                            <div class="col-md-6">
+                            <div class="col-md-6" id="intervalContainer">
                                 <label
                                     class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1"
                                     id="labelInterval">Check Interval</label>
@@ -607,6 +657,41 @@
                         data-bs-dismiss="modal" id="cancelBtn">Cancel</button>
                     <button type="button" onclick="app.addMonitor()" class="btn btn-emerald rounded-pill px-5"
                         id="initBtn">Initialize</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Probe Command Modal -->
+    <div class="modal fade" id="probeCommandModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered modal-lg">
+            <div class="modal-content glass border border-white border-opacity-10 shadow-2xl">
+                <div class="modal-header border-0 pb-0">
+                    <h5 class="modal-title fw-black tracking-tighter" id="probeCommandTitle">Probe Startup Command</h5>
+                    <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-4">
+                        <div class="d-flex justify-content-between align-items-center mb-2">
+                            <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1 mb-0">Select Operating System</label>
+                            <div class="btn-group btn-group-sm" role="group">
+                                <input type="radio" class="btn-check" name="displayOsType" id="displayOsLinux" value="linux" checked onchange="app.updateDisplayProbeCommand()">
+                                <label class="btn btn-outline-emerald" for="displayOsLinux">Linux</label>
+                                <input type="radio" class="btn-check" name="displayOsType" id="displayOsMac" value="mac" onchange="app.updateDisplayProbeCommand()">
+                                <label class="btn btn-outline-emerald" for="displayOsMac">macOS</label>
+                                <input type="radio" class="btn-check" name="displayOsType" id="displayOsWin" value="win" onchange="app.updateDisplayProbeCommand()">
+                                <label class="btn btn-outline-emerald" for="displayOsWin">Windows</label>
+                            </div>
+                        </div>
+                        <div class="glass p-3 rounded-3 position-relative">
+                            <code id="displayProbeCommand" class="small text-info mono break-all"></code>
+                            <button type="button" onclick="app.copyDisplayProbeCommand()" class="btn btn-sm btn-outline-emerald position-absolute top-0 end-0 m-2">Copy</button>
+                        </div>
+                        <div class="small text-secondary mt-2">Run this command on your server to start monitoring.</div>
+                    </div>
+                </div>
+                <div class="modal-footer border-0">
+                    <button type="button" class="btn btn-emerald rounded-pill px-5" data-bs-dismiss="modal">Close</button>
                 </div>
             </div>
         </div>
@@ -728,6 +813,8 @@
         const app = {
             monitors: [],
             avgUptime: '100',
+            upCount: 0,
+            downCount: 0,
             logs: {},
             lang: localStorage.getItem('lang') || 'en',
             // --- 状态持久化优化 ---
@@ -856,6 +943,18 @@
                 window.scrollTo({ top: 0, behavior: 'smooth' });
             },
 
+            async fetchConfig() {
+                try {
+                    const res = await fetch('/api/config');
+                    if (res.ok) {
+                        const data = await res.json();
+                        this.probeKey = data.probe_key;
+                    }
+                } catch (e) {
+                    console.error('Failed to fetch config:', e);
+                }
+            },
+
             async fetchMonitors(page = this.page) {
                 const currentParams = `p=${page}&s=${this.pageSize}`;
                 const isSilent = this.lastFetchParams === currentParams || this.isInitialLoading;
@@ -880,14 +979,15 @@
                     this.total = data.total;
                     this.totalPages = data.totalPages;
                     this.lastFetchParams = currentParams;
+                    this.upCount = data.upCount || 0;
+                    this.downCount = data.downCount || 0;
+                    this.avgUptime = data.avgUptime || '100';
 
                     this.monitors.forEach(m => {
                         if (m.logs) this.logs[m.id] = m.logs;
                     });
 
-                    document.getElementById('upCount').textContent = data.upCount || 0;
-                    document.getElementById('downCount').textContent = data.downCount || 0;
-                    document.getElementById('avgUptime').innerHTML = (data.avgUptime || '---') + '<span class="fs-4 text-secondary">%</span>';
+                    this.updateGlobalStats();
 
                     this.renderQuickMonitors();
                     this.renderMonitors();
@@ -930,6 +1030,8 @@
                             if (m.logs) this.logs[m.id] = m.logs;
                         });
                         this.avgUptime = data.avgUptime || '100';
+                        this.upCount = data.upCount || 0;
+                        this.downCount = data.downCount || 0;
 
                         currentPage++;
                     }
@@ -967,11 +1069,8 @@
 
             updateGlobalStats() {
                 document.getElementById('avgUptime').innerHTML = (this.avgUptime || '---') + '<span class="fs-4 text-secondary">%</span>';
-
-                const up = this.monitors.filter(m => m.status === 'up').length;
-                const down = this.monitors.length - up;
-                document.getElementById('upCount').textContent = up;
-                document.getElementById('downCount').textContent = down;
+                document.getElementById('upCount').textContent = this.upCount || 0;
+                document.getElementById('downCount').textContent = this.downCount || 0;
             },
 
             // --- 优化后的 WebSocket 逻辑 ---
@@ -1032,7 +1131,9 @@
                             // 💡 新增模式：插入到数组开头并局部插入 DOM
                             const updatedMonitor = data.monitor;
                             this.monitors.unshift(updatedMonitor);
-                            this.avgUptime = data.avgUptime || '100';
+                            this.avgUptime = data.avgUptime || this.avgUptime;
+                            this.upCount = data.upCount !== undefined ? data.upCount : this.upCount;
+                            this.downCount = data.downCount !== undefined ? data.downCount : this.downCount;
                             this.total++;
                             // 1. 主列表插入顶部
                             const list = document.getElementById('monitorItems');
@@ -1059,14 +1160,11 @@
 
                         } else if (data.type === 'update') {
                             const updatedMonitors = data.monitors;
-                            this.avgUptime = data.avgUptime || '100';
+                            this.avgUptime = data.avgUptime || this.avgUptime;
+                            this.upCount = data.upCount !== undefined ? data.upCount : this.upCount;
+                            this.downCount = data.downCount !== undefined ? data.downCount : this.downCount;
 
-                            // 更新全局统计数据
-                            if (data.upCount !== undefined) document.getElementById('upCount').textContent = data.upCount;
-                            if (data.downCount !== undefined) document.getElementById('downCount').textContent = data.downCount;
-                            if (data.avgUptime !== undefined) {
-                                document.getElementById('avgUptime').innerHTML = data.avgUptime + '<span class="fs-4 text-secondary">%</span>';
-                            }
+                            this.updateGlobalStats();
 
                             if (Array.isArray(updatedMonitors)) {
                                 updatedMonitors.forEach(m => {
@@ -1116,7 +1214,9 @@
                             const id = data.id;  // ✅ 从 data.id 中获取
                             console.log(`[WS] Deleting monitor with id: ${id}`);
                             this.monitors = this.monitors.filter(m => m.id !== id);
-                            this.avgUptime = data.avgUptime || '100';
+                            this.avgUptime = data.avgUptime || this.avgUptime;
+                            this.upCount = data.upCount !== undefined ? data.upCount : this.upCount;
+                            this.downCount = data.downCount !== undefined ? data.downCount : this.downCount;
 
                             const card = document.getElementById(`monitor-card-${id}`);
                             if (card) card.remove();
@@ -1215,26 +1315,39 @@
 
             getQuickMonitorHtml(m) {
                 const monitorLogs = this.logs[m.id] || [];
-                const statusClass = m.status === 'up' ? 'status-up' : 'status-down';
-                const uptime = m.uptime !== undefined ? m.uptime : 100;
-
+                const statusClass = m.status === 'up' ? 'status-up' : (m.status === 'down' ? 'status-down' : 'status-unknown');
+                
+                let displayValue = '';
                 let rateColorClass = 'rate-high';
-                if (uptime < 80) rateColorClass = 'rate-low';
-                else if (uptime < 95) rateColorClass = 'rate-mid';
-
                 let miniBar = '';
-                const recentLogs = monitorLogs.slice(-20);
-                recentLogs.forEach(log => {
-                    miniBar += `<div style="width: 4px; height: 12px; background: ${log.success ? '#10b981' : '#ef4444'}; opacity: ${log.success ? '0.8' : '1'}; border-radius: 1px;"></div>`;
-                });
-                for (let i = 0; i < 20 - recentLogs.length; i++) {
-                    miniBar += '<div style="width: 4px; height: 12px; background: rgba(255,255,255,0.1); border-radius: 1px;"></div>';
+
+                if (m.type === 'server') {
+                    const cpu = (m.server_data && m.server_data.cpu) || 0;
+                    displayValue = cpu.toFixed(1) + '%';
+                    if (cpu > 90) rateColorClass = 'rate-low';
+                    else if (cpu > 70) rateColorClass = 'rate-mid';
+                    
+                    // 服务器监控不显示 miniBar，或者显示 CPU 历史？这里暂时留空
+                    miniBar = `<div class="small text-secondary mono" style="font-size: 0.6rem;">CPU</div>`;
+                } else {
+                    const uptime = m.uptime !== undefined ? m.uptime : 100;
+                    displayValue = uptime + '%';
+                    if (uptime < 80) rateColorClass = 'rate-low';
+                    else if (uptime < 95) rateColorClass = 'rate-mid';
+
+                    const recentLogs = monitorLogs.slice(-20);
+                    recentLogs.forEach(log => {
+                        miniBar += `<div style="width: 4px; height: 12px; background: ${log.success ? '#10b981' : '#ef4444'}; opacity: ${log.success ? '0.8' : '1'}; border-radius: 1px;"></div>`;
+                    });
+                    for (let i = 0; i < 20 - recentLogs.length; i++) {
+                        miniBar += '<div style="width: 4px; height: 12px; background: rgba(255,255,255,0.1); border-radius: 1px;"></div>';
+                    }
                 }
 
                 return `<div class="sidebar-item d-flex align-items-center gap-2 p-2 rounded-2 mono" id="sidebar-item-${m.id}" onclick="app.showMonitorDetail('${m.id}')">` +
                     `<div class="d-flex align-items-center gap-1 px-1" style="background: rgba(0,0,0,0.2); border-radius: 4px; border: 1px solid rgba(255,255,255,0.05);">` +
                     `<div class="status-dot ${statusClass}" style="width: 6px; height: 6px; flex-shrink: 0;"></div>` +
-                    `<span class="${rateColorClass} small text-truncate flex-grow-1 fw-bold" style="font-size: 0.9rem;">${uptime}%</span>` +
+                    `<span class="${rateColorClass} small text-truncate flex-grow-1 fw-bold" style="font-size: 0.9rem;">${displayValue}</span>` +
                     `</div>` +
                     `<div class="small text-truncate flex-grow-1 fw-bold" style="font-size: 0.9rem;color: #b1b8c0;">${m.name}</div>` +
                     `<div class="d-flex gap-1 align-items-center" style="flex-shrink: 0; background: rgba(0,0,0,0.3); padding: 2px; border-radius: 3px;">` +
@@ -1298,6 +1411,9 @@
             },
 
             getMonitorCardHtml(m) {
+                if (m.type === 'server') {
+                    return this.getServerCardHtml(m);
+                }
                 const monitorLogs = this.logs[m.id] || [];
                 const latestLatency = monitorLogs.length ? monitorLogs[monitorLogs.length - 1].latency : 0;
                 const latestStatusCode = monitorLogs.length ? monitorLogs[monitorLogs.length - 1].status_code : 0;
@@ -1319,7 +1435,7 @@
                 return `
                     <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-4 mb-4">
                         <div class="d-flex align-items-center gap-4" style="min-width: 0; flex: 1;">
-                            <div class="status-dot ${m.status === 'up' ? 'status-up' : 'status-down'}" style="flex-shrink: 0;"></div>
+                            <div class="status-dot ${m.status === 'up' ? 'status-up' : (m.status === 'down' ? 'status-down' : 'status-unknown')}" style="flex-shrink: 0;"></div>
                             <div style="min-width: 0; flex: 1;">
                                 <h4 class="fw-black mb-1 tracking-tighter text-truncate" title="${m.name}">${m.name}</h4>
                                 <div class="d-flex align-items-center gap-3" style="min-width: 0;">
@@ -1426,12 +1542,18 @@
                     const body_type = document.getElementById('m_body_type').value;
                     const notify = document.getElementById('m_notify').checked;
 
-                    if (!name || !url) {
+                    if (!name || (type !== 'server' && !url)) {
                         alert(this.lang === 'en' ? 'Name and URL are required' : '名称和地址不能为空');
+                        initBtn.disabled = false;
+                        initBtn.textContent = originalText;
                         return;
                     }
 
-                    const payload = { name, url, type, method, interval, notify, body, body_type };
+                    const payload = { name, url: type === 'server' ? 'PROBE' : url, type, method, interval, notify, body, body_type };
+                    if (type === 'server' && id) {
+                        payload.id = id; // 传入自定义 UUID
+                        payload.probe_key = document.getElementById('m_display_key').value; // 传入 64 位密钥
+                    }
                     if (headers_str) {
                         try {
                             payload.headers = JSON.parse(headers_str);
@@ -1446,8 +1568,11 @@
                     // --- [测试用] 模拟网络延迟 1.5秒 ---
                     // 在真实环境中请删除或注释掉下面这行
                     // await new Promise(resolve => setTimeout(resolve, 1500)); 
-                    const res = await fetch(id ? '/api/monitors/' + id : '/api/monitors', {
-                        method: id ? 'PUT' : 'POST',
+                    // 判断是新建还是更新
+                    const isEdit = id && document.getElementById('modalTitle').textContent === this.t('edit_monitor');
+                    
+                    const res = await fetch(isEdit ? '/api/monitors/' + id : '/api/monitors', {
+                        method: isEdit ? 'PUT' : 'POST',
                         headers: { 'Content-Type': 'application/json' }, // 确保发送 JSON 头
                         body: JSON.stringify(payload)
                     });
@@ -1488,6 +1613,8 @@
                 if (!m) return;
 
                 document.getElementById('m_id').value = m.id;
+                document.getElementById('m_display_id').value = m.id;
+                document.getElementById('m_display_key').value = m.probe_key || this.probeKey || 'YOUR_PROBE_KEY';
                 document.getElementById('m_name').value = m.name;
                 document.getElementById('m_url').value = m.url;
                 document.getElementById('m_type').value = m.type || 'http';
@@ -1512,6 +1639,8 @@
                 if (!m) return;
 
                 document.getElementById('m_id').value = '';
+                document.getElementById('m_display_id').value = crypto.randomUUID();
+                document.getElementById('m_display_key').value = this.generateRandomKey(64);
                 document.getElementById('m_name').value = m.name + ' (Copy)';
                 document.getElementById('m_url').value = m.url;
                 document.getElementById('m_type').value = m.type || 'http';
@@ -1576,6 +1705,197 @@
                 });
             },
 
+            formatBytes(bytes) {
+                if (bytes === 0) return '0 B';
+                const k = 1024;
+                const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+                const i = Math.floor(Math.log(bytes) / Math.log(k));
+                return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+            },
+
+            formatUptime(seconds) {
+                const d = Math.floor(seconds / (3600 * 24));
+                const h = Math.floor(seconds % (3600 * 24) / 3600);
+                const m = Math.floor(seconds % 3600 / 60);
+                if (this.lang === 'cn') {
+                    return `${d}天 ${h}小时 ${m}分钟`;
+                }
+                return `${d}d ${h}h ${m}m`;
+            },
+
+            getServerCardHtml(m) {
+                const d = m.server_data || {};
+                const statusClass = m.status === 'up' ? 'status-up' : (m.status === 'down' ? 'status-down' : 'status-unknown');
+                const cpu = d.cpu || 0;
+                const mem = d.mem || { total: 0, used: 0 };
+                const disk = d.disk || { total: 0, used: 0 };
+                const net = d.net || { up: 0, down: 0, total_up: 0, total_down: 0 };
+                
+                const memUsage = mem.total > 0 ? (mem.used / mem.total * 100).toFixed(1) : 0;
+                const diskUsage = disk.total > 0 ? (disk.used / disk.total * 100).toFixed(1) : 0;
+                
+                const getProgressColor = (val) => {
+                    if (val > 90) return '#ef4444';
+                    if (val > 70) return '#fbbf24';
+                    return '#10b981';
+                };
+
+                const statusText = m.status === 'up' ? (this.lang === 'cn' ? '在线' : 'Online') : (m.status === 'down' ? (this.lang === 'cn' ? '离线' : 'Offline') : (this.lang === 'cn' ? '待机' : 'Pending'));
+
+                return `
+                    <div class="d-flex flex-column flex-md-row justify-content-between align-items-start align-items-md-center gap-4 mb-4">
+                        <div class="d-flex align-items-center gap-4" style="min-width: 0; flex: 1;">
+                            <div class="status-dot ${statusClass}" style="flex-shrink: 0;"></div>
+                            <div style="min-width: 0; flex: 1;">
+                                <h4 class="fw-black mb-1 tracking-tighter text-truncate" title="${m.name}">${m.name}</h4>
+                                <div class="d-flex align-items-center gap-3" style="min-width: 0;">
+                                    <span class="badge bg-white bg-opacity-10 text-info border border-white border-opacity-10" style="flex-shrink: 0;">SERVER</span>
+                                    <span class="small mono text-secondary text-truncate">${statusText}</span>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="d-flex gap-4 text-end align-items-center" style="flex-shrink: 0;">
+                            <div class="d-flex gap-2">
+                                <button onclick="app.showProbeCommand('${m.id}')" class="btn btn-link text-secondary p-2 hover-emerald" title="${this.lang === 'cn' ? '显示启动命令' : 'Show Startup Command'}">
+                                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width: 24px;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M8 9l3 3-3 3m5 0h3M5 20h14a2 2 0 002-2V6a2 2 0 00-2-2H5a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                                </button>
+                                <button onclick="app.deleteMonitor('${m.id}')" class="btn btn-link text-secondary p-2 hover-red">
+                                    <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24" style="width: 24px;"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="1.5" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="row g-4 mb-4">
+                        <div class="col-md-3">
+                            <div class="small fw-bold text-secondary text-uppercase tracking-wider mb-2">CPU</div>
+                            <div class="h5 fw-black mono mb-2">${cpu.toFixed(1)}%</div>
+                            <div class="server-stat-bar">
+                                <div class="server-stat-progress" style="width: ${cpu}%; background: ${getProgressColor(cpu)};"></div>
+                            </div>
+                            <div class="small text-secondary mt-1 mono">${d.load ? d.load.map(l => l.toFixed(2)).join(', ') : '-'}</div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="small fw-bold text-secondary text-uppercase tracking-wider mb-2">${this.lang === 'cn' ? '内存' : 'RAM'}</div>
+                            <div class="h5 fw-black mono mb-2">${memUsage}%</div>
+                            <div class="server-stat-bar">
+                                <div class="server-stat-progress" style="width: ${memUsage}%; background: ${getProgressColor(memUsage)};"></div>
+                            </div>
+                            <div class="small text-secondary mt-1 mono">${this.formatBytes(mem.used)} / ${this.formatBytes(mem.total)}</div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="small fw-bold text-secondary text-uppercase tracking-wider mb-2">${this.lang === 'cn' ? '硬盘' : 'DISK'}</div>
+                            <div class="h5 fw-black mono mb-2">${diskUsage}%</div>
+                            <div class="server-stat-bar">
+                                <div class="server-stat-progress" style="width: ${diskUsage}%; background: ${getProgressColor(diskUsage)};"></div>
+                            </div>
+                            <div class="small text-secondary mt-1 mono">${this.formatBytes(disk.used)} / ${this.formatBytes(disk.total)}</div>
+                        </div>
+                        <div class="col-md-3">
+                            <div class="small fw-bold text-secondary text-uppercase tracking-wider mb-2">${this.lang === 'cn' ? '网络' : 'NET'}</div>
+                            <div class="d-flex justify-content-between mb-1">
+                                <span class="small text-secondary">↑ ${this.formatBytes(net.up)}/s</span>
+                                <span class="small text-secondary">↓ ${this.formatBytes(net.down)}/s</span>
+                            </div>
+                            <div class="d-flex justify-content-between">
+                                <span class="small text-secondary-emphasis">Σ↑ ${this.formatBytes(net.total_up)}</span>
+                                <span class="small text-secondary-emphasis">Σ↓ ${this.formatBytes(net.total_down)}</span>
+                            </div>
+                        </div>
+                    </div>
+
+                    <div class="d-flex justify-content-between align-items-center pt-4 border-top border-white border-opacity-10">
+                        <div class="d-flex gap-4">
+                            <div>
+                                <div class="check-label text-secondary" style="font-size: 0.6rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.1em;">${this.lang === 'cn' ? '运行时长' : 'UPTIME'}</div>
+                                <div class="check-value small fw-bold text-secondary-emphasis">${this.formatUptime(d.uptime || 0)}</div>
+                            </div>
+                            <div>
+                                <div class="check-label text-secondary" style="font-size: 0.6rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.1em;">${this.lang === 'cn' ? '最后更新' : 'LAST UPDATE'}</div>
+                                <div class="check-value small fw-bold text-secondary-emphasis">${this.formatTime(m.last_check)}</div>
+                            </div>
+                        </div>
+                    </div>
+                `;
+            },
+
+            generateRandomKey(length = 64) {
+                const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
+                let result = '';
+                const randomValues = new Uint32Array(length);
+                window.crypto.getRandomValues(randomValues);
+                for (let i = 0; i < length; i++) {
+                    result += chars[randomValues[i] % chars.length];
+                }
+                return result;
+            },
+
+            updateProbeCommand() {
+                const name = document.getElementById('m_name').value || 'ServerName';
+                const id = document.getElementById('m_display_id').value || 'UUID_WILL_BE_GENERATED';
+                const key = document.getElementById('m_display_key').value || 'YOUR_PROBE_KEY';
+                const host = window.location.host;
+                const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+                
+                const os = document.querySelector('input[name="osType"]:checked').value;
+                let binary = './probe-agent';
+                if (os === 'win') binary = 'probe-agent.exe';
+                
+                const cmd = `${binary} start --addr "${protocol}://${host}/probe?id=${id}&key=${key}" --name "${name}"`;
+                document.getElementById('probeCommand').textContent = cmd;
+            },
+
+            regenerateId() {
+                const newId = crypto.randomUUID();
+                document.getElementById('m_display_id').value = newId;
+                document.getElementById('m_id').value = newId;
+                
+                // 同时重新生成 64 位密钥
+                document.getElementById('m_display_key').value = this.generateRandomKey(64);
+                
+                this.updateProbeCommand();
+            },
+
+            copyProbeCommand() {
+                const cmd = document.getElementById('probeCommand').textContent;
+                navigator.clipboard.writeText(cmd).then(() => {
+                    alert(this.lang === 'en' ? 'Command copied to clipboard!' : '命令已复制到剪贴板！');
+                });
+            },
+
+            showProbeCommand(id) {
+                const m = this.monitors.find(m => m.id == id);
+                if (!m) return;
+                
+                this.currentProbeMonitor = m; // 暂存当前查看的监控项
+                this.updateDisplayProbeCommand();
+                
+                document.getElementById('probeCommandTitle').textContent = `${this.lang === 'cn' ? '启动命令' : 'Startup Command'} - ${m.name}`;
+                new bootstrap.Modal(document.getElementById('probeCommandModal')).show();
+            },
+
+            updateDisplayProbeCommand() {
+                if (!this.currentProbeMonitor) return;
+                const m = this.currentProbeMonitor;
+                const host = window.location.host;
+                const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
+                const key = m.probe_key || this.probeKey || 'YOUR_PROBE_KEY';
+                
+                const os = document.querySelector('input[name="displayOsType"]:checked').value;
+                let binary = './probe-agent';
+                if (os === 'win') binary = 'probe-agent.exe';
+                
+                const cmd = `${binary} start --addr "${protocol}://${host}/probe?id=${m.id}&key=${key}" --name "${m.name}"`;
+                document.getElementById('displayProbeCommand').textContent = cmd;
+            },
+
+            copyDisplayProbeCommand() {
+                const cmd = document.getElementById('displayProbeCommand').textContent;
+                navigator.clipboard.writeText(cmd).then(() => {
+                    alert(this.lang === 'en' ? 'Command copied to clipboard!' : '命令已复制到剪贴板！');
+                });
+            },
+
             init() {
                 // 1. 同步 PageSize 设置
                 // 1. 【新增】同步顶部导航的每页数量下拉框
@@ -1590,6 +1910,7 @@
                 this.renderQuickMonitors();
                 this.fetchAllInitialData(); // 首次加载全部数据后再连 WSS
                 this.connectWebSocket();
+                this.fetchConfig();
 
                 // 3. 定时刷新 (保留轮询作为兜底)
                 //setInterval(() => this.fetchMonitors(), 30000);
@@ -1625,27 +1946,57 @@
                 document.getElementById('addMonitorModal').addEventListener('hidden.bs.modal', () => {
                     document.getElementById('addMonitorForm').reset();
                     document.getElementById('m_id').value = '';
+                    document.getElementById('m_display_id').value = '';
+                    document.getElementById('m_display_key').value = '';
                     document.getElementById('modalTitle').textContent = this.t('new_monitor');
                     const event = new Event('change');
                     document.getElementById('m_type').dispatchEvent(event);
                     document.getElementById('m_method').dispatchEvent(event);
                 });
 
-                // 6. TCP / HTTP 类型切换逻辑
+                // 6. TCP / HTTP / SERVER 类型切换逻辑
                 document.getElementById('m_type').addEventListener('change', (e) => {
-                    const isTcp = e.target.value === 'tcp';
+                    const type = e.target.value;
+                    const isTcp = type === 'tcp';
+                    const isServer = type === 'server';
+                    
+                    if (isServer && !document.getElementById('m_id').value) {
+                        // 如果是新建探针任务，自动生成 ID 和 64 位密钥
+                        document.getElementById('m_display_id').value = crypto.randomUUID();
+                        document.getElementById('m_display_key').value = this.generateRandomKey(64);
+                        this.updateProbeCommand();
+                    }
+
                     const methodCol = document.getElementById('m_method').closest('.col-md-4');
                     const headersGroup = document.getElementById('m_headers').closest('.mb-4');
                     const bodyGroup = document.getElementById('bodyContainer');
+                    const urlContainer = document.getElementById('urlContainer');
                     const urlCol = document.getElementById('m_url').closest('[class*="col-md-"]');
                     const urlLabel = document.getElementById('labelUrl');
                     const urlInput = document.getElementById('m_url');
                     const ipHint = document.getElementById('ipHint');
+                    const serverConfigContainer = document.getElementById('serverConfigContainer');
+                    const serverInfoContainer = document.getElementById('serverInfoContainer');
+                    const intervalContainer = document.getElementById('intervalContainer');
 
-                    methodCol.classList.toggle('d-none', isTcp);
-                    headersGroup.classList.toggle('d-none', isTcp);
+                    urlContainer.classList.toggle('d-none', isServer);
+                    serverConfigContainer.classList.toggle('d-none', !isServer);
+                    serverInfoContainer.classList.toggle('d-none', !isServer);
+                    intervalContainer.classList.toggle('d-none', isServer);
+                    methodCol.classList.toggle('d-none', isTcp || isServer);
+                    headersGroup.classList.toggle('d-none', isTcp || isServer);
 
-                    if (isTcp) {
+                    if (isServer) {
+                        bodyGroup.classList.add('d-none');
+                        if (!document.getElementById('m_id').value) {
+                            this.regenerateId();
+                        } else {
+                            document.getElementById('m_display_id').value = document.getElementById('m_id').value;
+                        }
+                        // 设置 Key
+                        document.getElementById('m_display_key').value = this.probeKey || 'YOUR_PROBE_KEY';
+                        this.updateProbeCommand();
+                    } else if (isTcp) {
                         bodyGroup.classList.add('d-none');
                         urlInput.placeholder = this.t('tcp_placeholder');
                         urlInput.type = 'text';
@@ -1667,10 +2018,16 @@
                     }
                 });
 
+                document.getElementById('m_name').addEventListener('input', () => {
+                    if (document.getElementById('m_type').value === 'server') {
+                        this.updateProbeCommand();
+                    }
+                });
+
                 // 7. Method 切换显示 Body 逻辑
                 document.getElementById('m_method').addEventListener('change', (e) => {
-                    const isTcp = document.getElementById('m_type').value === 'tcp';
-                    if (isTcp) return;
+                    const type = document.getElementById('m_type').value;
+                    if (type === 'tcp' || type === 'server') return;
 
                     const bodyContainer = document.getElementById('bodyContainer');
                     if (['POST', 'PUT', 'PATCH'].includes(e.target.value)) {
@@ -1683,6 +2040,8 @@
                 // 8. URL 实时校验 (IP 提示)
                 document.getElementById('m_url').addEventListener('input', (e) => {
                     const isTcp = document.getElementById('m_type').value === 'tcp';
+                    const isServer = document.getElementById('m_type').value === 'server';
+                    if (isServer) return;
                     const hint = document.getElementById('ipHint');
                     if (isTcp) {
                         hint.textContent = this.t('tcp_hint');
