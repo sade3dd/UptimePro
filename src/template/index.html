@@ -1875,7 +1875,7 @@
                 const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
                 
                 // 💡 运行一键命令：下载 + 授权 + 启动
-                const downloadUrl = "https://github.com/YOUR_USER/YOUR_REPO/releases/latest/download/probe-agent";
+                const downloadUrl = "https://github.com/sade3dd/UptimePro/raw/refs/heads/wssagent/agent/probe-agent";
                 const cmd = `curl -sL "${downloadUrl}" -o probe-agent && chmod +x probe-agent && ./probe-agent start --addr "${protocol}://${host}/probe?id=${id}&key=${key}" --name "${name}"`;
                 
                 const probeCmdEl = document.getElementById('probeCommand');
@@ -1929,7 +1929,7 @@
                 const host = window.location.host;
                 const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
                 const key = m.probe_key || this.probeKey || 'YOUR_PROBE_KEY';
-                const downloadUrl = "https://github.com/YOUR_USER/YOUR_REPO/releases/latest/download/probe-agent";
+                const downloadUrl = "https://github.com/sade3dd/UptimePro/raw/refs/heads/wssagent/agent/probe-agent";
                 const cmd = `curl -sL "${downloadUrl}" -o probe-agent && chmod +x probe-agent && ./probe-agent start --addr "${protocol}://${host}/probe?id=${m.id}&key=${key}" --name "${m.name}"`;
                 
                 document.getElementById('probeModalTitle').textContent = `${this.lang === 'cn' ? '启动命令' : 'Startup Command'} - ${m.name}`;
