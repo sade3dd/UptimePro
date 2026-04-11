@@ -347,10 +347,10 @@ export class MonitorEngine extends DurableObject {
       
       // 5. 确保闹钟已开启（用于超时检查）
       const alarmTime = await this.state.storage.getAlarm();
-      console.log('alarmTime:', alarmTime);
+      //console.log('alarmTime:', alarmTime);
       if (!alarmTime || alarmTime < Date.now()) {
         await this.state.storage.setAlarm(Date.now() + 30000);
-        console.log('Alarm set to:', Date.now() + 30000);
+        //console.log('Alarm set to:', Date.now() + 30000);
       }
       
       // 广播更新
