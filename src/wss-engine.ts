@@ -13,6 +13,9 @@ export class WSSEngine extends DurableObject {
     this.state.setWebSocketAutoResponse(
       new WebSocketRequestResponsePair("ping", "pong")
     );
+        // ⭐ 服务器端主动心跳：定期发送 ping 给所有连接
+    // Cloudflare 官方推荐方式，保持连接活跃
+    this.state.storage.setAlarm(Date.now() + 10000); // 10秒后触发心跳
   }
 
   broadcast(data: any) {
@@ -68,7 +71,24 @@ export class WSSEngine extends DurableObject {
 
     return new Response("Not found", { status: 404 });
   }
+  async alarm() {
+    const connections = this.state.getWebSockets();
+    console.log(`[WSSEngine] Server heartbeat: pinging ${connections.length} connections`);
 
+    // 向所有连接发送服务器端心跳
+    for (const ws of connections) {
+      if (ws.readyState === WebSocket.OPEN) {
+        try {
+          ws.send("ping");
+        } catch (e) {
+          console.error(`[WSSEngine] Failed to send heartbeat to connection:`, e);
+        }
+      }
+    }
+
+    // 设置下一次心跳（10秒后）
+    this.state.storage.setAlarm(Date.now() + 10000); // 10秒后触发心跳
+  }
   private ipMap: Map<WebSocket, string> = new Map();
 
   async webSocketMessage(ws: WebSocket, message: string | ArrayBuffer) {
@@ -91,6 +111,7 @@ export class WSSEngine extends DurableObject {
         }));
       }
     } catch (e) {
+      //console.log(`[WSSEngine] Error parsing message:`, message);
       // 忽略非 JSON 消息或解析错误
     }
   }
