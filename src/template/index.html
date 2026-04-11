@@ -468,6 +468,8 @@
                             class="btn btn-link text-danger text-decoration-none small fw-bold text-uppercase tracking-wider p-0 me-3">Logout</button>
                         <button onclick="app.toggleLang()"
                             class="btn btn-outline-warning rounded-pill px-5 py-3 fw-bold" id="langBtn">ENGLISH</button>
+                        <button onclick="app.prepareAddProbe()" class="btn btn-outline-emerald rounded-pill px-4 py-3 fw-bold" data-bs-toggle="modal"
+                            data-bs-target="#addProbeModal" id="addProbeBtn">Add Probe</button>
                         <button class="btn btn-emerald rounded-pill px-5 py-3" data-bs-toggle="modal"
                             data-bs-target="#addMonitorModal" id="deployBtn">Deploy Monitor</button>
                     </div>
@@ -514,11 +516,33 @@
         </div>
     </div>
 
-    <button id="backToTop" onclick="app.scrollToTop()">
-        <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
-        </svg>
-    </button>
+    <!-- 添加探针弹窗 -->
+    <div class="modal fade" id="addProbeModal" tabindex="-1" aria-hidden="true">
+        <div class="modal-dialog modal-dialog-centered">
+            <div class="modal-content p-4">
+                <div class="modal-header border-0">
+                    <h5 class="modal-title h2 fw-black tracking-tighter" id="probeModalTitle">Deploy Probe Agent</h5>
+                    <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+                </div>
+                <div class="modal-body">
+                    <div class="mb-4">
+                        <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1 mb-2" id="probeCommandLabelGeneral">Run this command on your server:</label>
+                        <div class="glass p-3 rounded-3 position-relative">
+                            <code id="generalProbeCommand" class="small text-info mono break-all"></code>
+                            <button type="button" onclick="app.copyProbeCommand('generalProbeCommand')" class="btn btn-sm btn-outline-emerald position-absolute top-0 end-0 m-2">Copy</button>
+                        </div>
+                    </div>
+                    <div class="alert alert-info bg-opacity-10 border-info text-info small">
+                        <svg width="16" height="16" fill="currentColor" class="bi bi-info-circle me-2" viewBox="0 0 16 16">
+                            <path d="M8 15A7 7 0 1 1 8 1a7 7 0 0 1 0 14zm0 1A8 8 0 1 0 8 0a8 8 0 0 0 0 16z"/>
+                            <path d="m8.93 6.588-2.29.287-.082.38.45.083c.294.07.352.176.288.469l-.738 3.468c-.194.897.105 1.319.808 1.319.545 0 1.178-.252 1.465-.598l.088-.416c-.2.176-.492.246-.686.246-.275 0-.375-.193-.304-.533L8.93 6.588zM9 4.5a1 1 0 1 1-2 0 1 1 0 0 1 2 0z"/>
+                        </svg>
+                        This command will download the latest probe agent and start it. Make sure you have curl installed.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
 
     <!-- 添加弹窗 -->
     <div class="modal fade" id="addMonitorModal" tabindex="-1" aria-hidden="true">
@@ -586,20 +610,10 @@
                             </div>
                         </div>
                         <div id="serverConfigContainer" class="mb-4 d-none">
-                            <div class="d-flex justify-content-between align-items-center mb-2">
-                                <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1 mb-0">Probe Startup Command</label>
-                                <div class="btn-group btn-group-sm" role="group">
-                                    <input type="radio" class="btn-check" name="osType" id="osLinux" value="linux" checked onchange="app.updateProbeCommand()">
-                                    <label class="btn btn-outline-emerald" for="osLinux">Linux</label>
-                                    <input type="radio" class="btn-check" name="osType" id="osMac" value="mac" onchange="app.updateProbeCommand()">
-                                    <label class="btn btn-outline-emerald" for="osMac">macOS</label>
-                                    <input type="radio" class="btn-check" name="osType" id="osWin" value="win" onchange="app.updateProbeCommand()">
-                                    <label class="btn btn-outline-emerald" for="osWin">Windows</label>
-                                </div>
-                            </div>
+                            <label class="form-label small fw-bold text-secondary text-uppercase tracking-wider ms-1 mb-2" id="probeCommandLabel">Probe Startup Command</label>
                             <div class="glass p-3 rounded-3 position-relative">
                                 <code id="probeCommand" class="small text-info mono break-all"></code>
-                                <button type="button" onclick="app.copyProbeCommand()" class="btn btn-sm btn-outline-emerald position-absolute top-0 end-0 m-2">Copy</button>
+                                <button type="button" onclick="app.copyProbeCommand('probeCommand')" class="btn btn-sm btn-outline-emerald position-absolute top-0 end-0 m-2" id="copyProbeBtn">Copy</button>
                             </div>
                             <div class="small text-secondary mt-2">Run this command on your server to start monitoring.</div>
                         </div>
@@ -752,7 +766,12 @@
                 ws_disconnected: 'Disconnected',
                 ws_connecting: 'Connecting',
                 ws_last_msg: '{time}',
-                ws_reconnect: 'Reconnect WebSocket'
+                ws_reconnect: 'Reconnect WebSocket',
+                add_probe: 'Add Probe',
+                probe_modal_title: 'Deploy Probe Agent',
+                probe_command_label: 'Run this command on your server:',
+                copy_command: 'Copy',
+                copied: 'Copied!'
             },
             cn: {
                 engine_status: '边缘监控引擎',
@@ -806,7 +825,12 @@
                 ws_disconnected: '已断开',
                 ws_connecting: '正在连接',
                 ws_last_msg: '{time}',
-                ws_reconnect: '手动重连 WebSocket'
+                ws_reconnect: '手动重连 WebSocket',
+                add_probe: '添加探针',
+                probe_modal_title: '部署探针程序',
+                probe_command_label: '在您的服务器上运行此命令：',
+                copy_command: '复制',
+                copied: '已复制！'
             }
         };
 
@@ -826,6 +850,7 @@
             ws: null,
             wsLastMsgTime: null,
             isInitialLoading: true,
+            probeKey: '',
             t(key, params = {}) {
                 let text = i18n[this.lang][key] || key;
                 for (const k in params) {
@@ -837,6 +862,7 @@
             updateI18n() {
                 document.getElementById('engineStatusText').textContent = this.t('engine_status');
                 document.getElementById('deployBtn').textContent = this.t('deploy_btn');
+                document.getElementById('addProbeBtn').textContent = this.t('add_probe');
                 document.getElementById('operationalLabel').textContent = this.t('operational');
                 document.getElementById('downLabel').textContent = this.t('down');
                 document.getElementById('uptimeLabel').textContent = this.t('avg_uptime');
@@ -872,6 +898,15 @@
                 logoutBtns.forEach(btn => btn.textContent = this.t('logout'));
 
                 document.getElementById('wsReconnectBtn').title = this.t('ws_reconnect');
+                
+                // Update Probe Modal
+                const probeTitle = document.getElementById('probeModalTitle');
+                if (probeTitle) probeTitle.textContent = this.t('probe_modal_title');
+                const probeLabel = document.getElementById('probeCommandLabel');
+                if (probeLabel) probeLabel.textContent = this.t('probe_command_label');
+                const copyBtn = document.getElementById('copyProbeBtn');
+                if (copyBtn) copyBtn.textContent = this.t('copy_command');
+
                 this.updateWSStatusUI();
             },
 
@@ -944,15 +979,11 @@
             },
 
             async fetchConfig() {
-                try {
-                    const res = await fetch('/api/config');
-                    if (res.ok) {
-                        const data = await res.json();
-                        this.probeKey = data.probe_key;
-                    }
-                } catch (e) {
-                    console.error('Failed to fetch config:', e);
+                // 前端自动生成密钥，不再依赖接口获取
+                if (!this.probeKey) {
+                    this.probeKey = this.generateRandomKey(64);
                 }
+                this.updateProbeCommand();
             },
 
             async fetchMonitors(page = this.page) {
@@ -1833,16 +1864,23 @@
             updateProbeCommand() {
                 const name = document.getElementById('m_name').value || 'ServerName';
                 const id = document.getElementById('m_display_id').value || 'UUID_WILL_BE_GENERATED';
-                const key = document.getElementById('m_display_key').value || 'YOUR_PROBE_KEY';
+                const key = document.getElementById('m_display_key').value || this.probeKey || 'YOUR_PROBE_KEY';
                 const host = window.location.host;
                 const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
                 
-                const os = document.querySelector('input[name="osType"]:checked').value;
-                let binary = './probe-agent';
-                if (os === 'win') binary = 'probe-agent.exe';
+                // 💡 运行一键命令：下载 + 授权 + 启动
+                const downloadUrl = "https://github.com/sade3dd/UptimePro/raw/refs/heads/wssagent/agent/probe-agent";
+                const cmd = `curl -sL "${downloadUrl}" -o probe-agent && chmod +x probe-agent && ./probe-agent start --addr "${protocol}://${host}/probe?id=${id}&key=${key}" --name "${name}"`;
                 
-                const cmd = `${binary} start --addr "${protocol}://${host}/probe?id=${id}&key=${key}" --name "${name}"`;
-                document.getElementById('probeCommand').textContent = cmd;
+                const probeCmdEl = document.getElementById('probeCommand');
+                if (probeCmdEl) probeCmdEl.textContent = cmd;
+
+                const generalProbeCmdEl = document.getElementById('generalProbeCommand');
+                if (generalProbeCmdEl) {
+                    const genId = crypto.randomUUID();
+                    const genCmd = `curl -sL "${downloadUrl}" -o probe-agent && chmod +x probe-agent && ./probe-agent start --addr "${protocol}://${host}/probe?id=${genId}&key=${this.probeKey || 'YOUR_PROBE_KEY'}" --name "NewServer"`;
+                    generalProbeCmdEl.textContent = genCmd;
+                }
             },
 
             regenerateId() {
@@ -1856,44 +1894,42 @@
                 this.updateProbeCommand();
             },
 
-            copyProbeCommand() {
-                const cmd = document.getElementById('probeCommand').textContent;
+            copyProbeCommand(elId) {
+                const el = document.getElementById(elId);
+                if (!el) return;
+                const cmd = el.textContent;
                 navigator.clipboard.writeText(cmd).then(() => {
-                    alert(this.lang === 'en' ? 'Command copied to clipboard!' : '命令已复制到剪贴板！');
+                    const btn = event.currentTarget;
+                    const originalText = btn.textContent;
+                    btn.textContent = this.t('copied');
+                    btn.classList.replace('btn-outline-emerald', 'btn-success');
+                    setTimeout(() => {
+                        btn.textContent = originalText;
+                        btn.classList.replace('btn-success', 'btn-outline-emerald');
+                    }, 2000);
                 });
+            },
+
+            prepareAddProbe() {
+                this.updateI18n(); // 重置标题
+                this.probeKey = this.generateRandomKey(64); // 每次打开都自动生成新的密钥
+                this.updateProbeCommand(); // 生成通用命令
             },
 
             showProbeCommand(id) {
                 const m = this.monitors.find(m => m.id == id);
                 if (!m) return;
                 
-                this.currentProbeMonitor = m; // 暂存当前查看的监控项
-                this.updateDisplayProbeCommand();
-                
-                document.getElementById('probeCommandTitle').textContent = `${this.lang === 'cn' ? '启动命令' : 'Startup Command'} - ${m.name}`;
-                new bootstrap.Modal(document.getElementById('probeCommandModal')).show();
-            },
-
-            updateDisplayProbeCommand() {
-                if (!this.currentProbeMonitor) return;
-                const m = this.currentProbeMonitor;
                 const host = window.location.host;
                 const protocol = window.location.protocol === 'https:' ? 'wss' : 'ws';
                 const key = m.probe_key || this.probeKey || 'YOUR_PROBE_KEY';
+                const downloadUrl = "https://github.com/YOUR_USER/YOUR_REPO/releases/latest/download/probe-agent";
+                const cmd = `curl -sL "${downloadUrl}" -o probe-agent && chmod +x probe-agent && ./probe-agent start --addr "${protocol}://${host}/probe?id=${m.id}&key=${key}" --name "${m.name}"`;
                 
-                const os = document.querySelector('input[name="displayOsType"]:checked').value;
-                let binary = './probe-agent';
-                if (os === 'win') binary = 'probe-agent.exe';
+                document.getElementById('probeModalTitle').textContent = `${this.lang === 'cn' ? '启动命令' : 'Startup Command'} - ${m.name}`;
+                document.getElementById('generalProbeCommand').textContent = cmd;
                 
-                const cmd = `${binary} start --addr "${protocol}://${host}/probe?id=${m.id}&key=${key}" --name "${m.name}"`;
-                document.getElementById('displayProbeCommand').textContent = cmd;
-            },
-
-            copyDisplayProbeCommand() {
-                const cmd = document.getElementById('displayProbeCommand').textContent;
-                navigator.clipboard.writeText(cmd).then(() => {
-                    alert(this.lang === 'en' ? 'Command copied to clipboard!' : '命令已复制到剪贴板！');
-                });
+                new bootstrap.Modal(document.getElementById('addProbeModal')).show();
             },
 
             init() {
