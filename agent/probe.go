@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -205,32 +206,65 @@ func connectAndMonitor(addr, name, id, key string, interval time.Duration) {
 
 		log.Println("Successfully connected to server.")
 
+		var mu sync.Mutex
+		done := make(chan struct{})
+
+		// Read loop to handle server-side pings
+		go func() {
+			defer close(done)
+			for {
+				_, message, err := conn.ReadMessage()
+				if err != nil {
+					log.Println("Read error:", err)
+					return
+				}
+				if string(message) == "ping" {
+					mu.Lock()
+					err := conn.WriteMessage(websocket.TextMessage, []byte("pong"))
+					mu.Unlock()
+					if err != nil {
+						log.Println("Pong write error:", err)
+						return
+					}
+				}
+			}
+		}()
+
 		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
 
 		func() {
 			defer conn.Close()
-			for range ticker.C {
-				metrics, err := getMetrics(&lastNetCounters, &lastTime)
-				if err != nil {
-					log.Println("Error getting metrics:", err)
-					continue
-				}
+			defer ticker.Stop()
+			for {
+				select {
+				case <-done:
+					return
+				case <-ticker.C:
+					metrics, err := getMetrics(&lastNetCounters, &lastTime)
+					if err != nil {
+						log.Println("Error getting metrics:", err)
+						continue
+					}
 
-				msg := Message{Type: "server_stats", ID: id, Name: name, Key: key, Data: metrics}
-				jsonData, err := json.Marshal(msg)
-				if err != nil {
-					log.Println("JSON marshal error:", err)
-					continue
-				}
+					msg := Message{Type: "server_stats", ID: id, Name: name, Key: key, Data: metrics}
+					jsonData, err := json.Marshal(msg)
+					if err != nil {
+						log.Println("JSON marshal error:", err)
+						continue
+					}
 
-				if err := conn.WriteMessage(websocket.TextMessage, jsonData); err != nil {
-					log.Println("Write error:", err)
-					return // Exit inner loop to trigger reconnect
+					mu.Lock()
+					err = conn.WriteMessage(websocket.TextMessage, jsonData)
+					mu.Unlock()
+					if err != nil {
+						log.Println("Write error:", err)
+						return // Exit inner loop to trigger reconnect
+					}
 				}
 			}
 		}()
 		log.Println("Connection lost. Reconnecting...")
+		time.Sleep(5 * time.Second)
 	}
 }
 
