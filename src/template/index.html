@@ -468,8 +468,7 @@
                             class="btn btn-link text-danger text-decoration-none small fw-bold text-uppercase tracking-wider p-0 me-3">Logout</button>
                         <button onclick="app.toggleLang()"
                             class="btn btn-outline-warning rounded-pill px-5 py-3 fw-bold" id="langBtn">ENGLISH</button>
-                        <button onclick="app.prepareAddProbe()" class="btn btn-outline-emerald rounded-pill px-4 py-3 fw-bold" data-bs-toggle="modal"
-                            data-bs-target="#addProbeModal" id="addProbeBtn">Add Probe</button>
+                        <button onclick="app.prepareAddProbe()" class="btn btn-outline-emerald rounded-pill px-4 py-3 fw-bold" id="addProbeBtn">Add Probe</button>
                         <button class="btn btn-emerald rounded-pill px-5 py-3" data-bs-toggle="modal"
                             data-bs-target="#addMonitorModal" id="deployBtn">Deploy Monitor</button>
                     </div>
@@ -1917,9 +1916,23 @@
             },
 
             prepareAddProbe() {
-                this.updateI18n(); // 重置标题
-                this.probeKey = this.generateRandomKey(64); // 每次打开都自动生成新的密钥
-                this.updateProbeCommand(); // 生成通用命令
+                // 重置表单
+                document.getElementById('addMonitorForm').reset();
+                document.getElementById('m_id').value = '';
+                document.getElementById('m_display_id').value = '';
+                document.getElementById('m_display_key').value = '';
+                document.getElementById('modalTitle').textContent = this.t('add_monitor');
+                
+                // 设置类型为 server
+                const typeSelect = document.getElementById('m_type');
+                typeSelect.value = 'server';
+                
+                // 触发 change 事件以显示/隐藏相关字段并生成 ID/Key
+                const event = new Event('change');
+                typeSelect.dispatchEvent(event);
+                
+                // 显示添加监控弹窗
+                new bootstrap.Modal(document.getElementById('addMonitorModal')).show();
             },
 
             showProbeCommand(id) {
@@ -1984,6 +1997,12 @@
                     document.body.style.cursor = 'default';
                 });
 
+                document.getElementById('m_name').addEventListener('input', () => {
+                    if (document.getElementById('m_type').value === 'server') {
+                        this.updateProbeCommand();
+                    }
+                });
+
                 // 5. Modal 隐藏时的重置逻辑
                 document.getElementById('addMonitorModal').addEventListener('hidden.bs.modal', () => {
                     document.getElementById('addMonitorForm').reset();
@@ -2002,13 +2021,6 @@
                     const isTcp = type === 'tcp';
                     const isServer = type === 'server';
                     
-                    if (isServer && !document.getElementById('m_id').value) {
-                        // 如果是新建探针任务，自动生成 ID 和 64 位密钥
-                        document.getElementById('m_display_id').value = crypto.randomUUID();
-                        document.getElementById('m_display_key').value = this.generateRandomKey(64);
-                        this.updateProbeCommand();
-                    }
-
                     const methodCol = document.getElementById('m_method').closest('.col-md-4');
                     const headersGroup = document.getElementById('m_headers').closest('.mb-4');
                     const bodyGroup = document.getElementById('bodyContainer');
@@ -2030,13 +2042,13 @@
 
                     if (isServer) {
                         bodyGroup.classList.add('d-none');
-                        if (!document.getElementById('m_id').value) {
+                        // 如果 ID 为空（新建），则生成新的 ID 和 Key
+                        if (!document.getElementById('m_id').value && !document.getElementById('m_display_id').value) {
                             this.regenerateId();
                         } else {
-                            document.getElementById('m_display_id').value = document.getElementById('m_id').value;
+                            // 如果已有 ID（编辑），确保显示 ID
+                            document.getElementById('m_display_id').value = document.getElementById('m_id').value || document.getElementById('m_display_id').value;
                         }
-                        // 设置 Key
-                        document.getElementById('m_display_key').value = this.probeKey || 'YOUR_PROBE_KEY';
                         this.updateProbeCommand();
                     } else if (isTcp) {
                         bodyGroup.classList.add('d-none');
