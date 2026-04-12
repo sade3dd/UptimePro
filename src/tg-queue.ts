@@ -57,6 +57,55 @@ export class MonitorEngine extends DurableObject {
   }
 
 
+  private getStats() {
+    const allMonitors = Array.from(this.monitors.values());
+    const total = allMonitors.length;
+    const upCount = allMonitors.filter(m => m.status === 'up').length;
+    const downCount = allMonitors.filter(m => m.status === 'down').length;
+    const unknownCount = allMonitors.filter(m => m.status === 'unknown').length;
+    const totalUptime = allMonitors.reduce((acc, m) => acc + (Number(m.uptime) || 0), 0);
+    const avgUptime = total > 0 ? (totalUptime / total).toFixed(2) : '---';
+    return { total, upCount, downCount, unknownCount, avgUptime };
+  }
+
+  /**
+   * 统一记录检查结果并更新可用率
+   */
+  private updateMonitorUptime(monitorId: string, success: boolean) {
+    const monitorData = this.monitors.get(monitorId);
+    if (!monitorData) return;
+
+    const now = Date.now();
+    const isSuccess = success ? 1 : 0;
+
+    if (!monitorData.history24h) {
+      monitorData.history24h = [];
+    }
+
+    monitorData.history24h.push({
+      success: isSuccess,
+      timestamp: now
+    });
+
+    // 清理超过24小时的记录
+    const twentyFourHoursAgo = now - 24 * 60 * 60 * 1000;
+    monitorData.history24h = monitorData.history24h.filter(
+      (log: any) => log.timestamp > twentyFourHoursAgo
+    );
+
+    // 计算精确的24小时成功率 (保留两位小数)
+    const total24h = monitorData.history24h.length;
+    const success24h = monitorData.history24h.filter((log: any) => log.success === 1).length;
+
+    const uptime = total24h > 0
+      ? parseFloat(((success24h / total24h) * 100).toFixed(2))
+      : 100;
+
+    monitorData.uptime24h = uptime;
+    monitorData.uptime = uptime;
+    this.monitors.set(monitorId, monitorData);
+  }
+
   async fetch(request: Request) {
     const url = new URL(request.url);
 
@@ -96,17 +145,16 @@ export class MonitorEngine extends DurableObject {
 
       const allMonitors = Array.from(this.monitors.values());
       // 按创建时间倒序排序
+      // 排序：优先显示系统探针 (type === 'server')，其次按创建时间倒序
       allMonitors.sort((a, b) => {
+        if (a.type === 'server' && b.type !== 'server') return -1;
+        if (a.type !== 'server' && b.type === 'server') return 1;
         const timeA = new Date(a.created_at || 0).getTime();
         const timeB = new Date(b.created_at || 0).getTime();
         return timeB - timeA;
       });
 
-      const total = allMonitors.length;
-      const upCount = allMonitors.filter(m => m.status === 'up').length;
-      const downCount = allMonitors.filter(m => m.status === 'down').length;
-      const totalUptime = allMonitors.reduce((acc, m) => acc + (m.uptime || 0), 0);
-      const avgUptime = total > 0 ? (totalUptime / total).toFixed(1) : '---';
+      const { total, upCount, downCount, avgUptime } = this.getStats();
 
       const start = (page - 1) * pageSize;
       const paginatedMonitors = allMonitors.slice(start, start + pageSize).map(monitor => {
@@ -134,7 +182,18 @@ export class MonitorEngine extends DurableObject {
       if (body.headers && typeof body.headers === 'object') {
         body.headers = JSON.stringify(body.headers);
       }
-      const id = crypto.randomUUID();
+      // 规范化 probe_key
+      if (body.probe_key) {
+        body.probe_key = String(body.probe_key).substring(0, 128);
+      }
+      // 允许前端传入自定义 ID (例如探针 UUID)
+      const id = body.id || crypto.randomUUID();
+      
+      // 如果 ID 已存在，返回错误 (POST 应该是新建)
+      if (this.monitors.has(id)) {
+        return Response.json({ error: "Monitor ID already exists" }, { status: 400, headers: corsHeaders });
+      }
+
       const newMonitor = {
         id,
         ...body,
@@ -158,12 +217,7 @@ export class MonitorEngine extends DurableObject {
       const { history24h, ...cleanMonitor } = newMonitor;
       // 💡 广播新增监控
       // 3. 计算统计数据并推送当前批次结果
-      const allMonitors = Array.from(this.monitors.values());
-      const total = allMonitors.length;
-      const upCount = allMonitors.filter(m => m.status === 'up').length;
-      const downCount = allMonitors.filter(m => m.status === 'down').length;
-      const totalUptime = allMonitors.reduce((acc, m) => acc + (m.uptime || 0), 0);
-      const avgUptime = total > 0 ? (totalUptime / total).toFixed(1) : '---';
+      const { total, upCount, downCount, avgUptime } = this.getStats();
       await this.broadcast({
         type: 'add',
         total,
@@ -180,14 +234,19 @@ export class MonitorEngine extends DurableObject {
     if (url.pathname.startsWith("/api/monitors/") && request.method === "PUT") {
       const id = url.pathname.split("/").pop();
       if (id && this.monitors.has(id)) {
-        const body = await request.json() as any;   
+        const body = await request.json() as any;
         // 确保 headers 是 JSON 字符串
         if (body.headers && typeof body.headers === 'object') {
-        body.headers = JSON.stringify(body.headers);
+          body.headers = JSON.stringify(body.headers);
         }
-         // 1. 规范化 notify 字段
+        // 1. 规范化 notify 字段
         if (body.notify !== undefined) {
           body.notify = body.notify ? 1 : 0;
+        }
+        
+        // 2. 确保 probe_key 被保存
+        if (body.probe_key) {
+          body.probe_key = String(body.probe_key).substring(0, 128);
         }
 
         body.next_check = new Date().toISOString();
@@ -201,12 +260,7 @@ export class MonitorEngine extends DurableObject {
         const { history24h, ...cleanMonitor } = updatedMonitor;
         // 💡 广播更新监控
         // 3. 计算统计数据并推送当前批次结果
-        const allMonitors = Array.from(this.monitors.values());
-        const total = allMonitors.length;
-        const upCount = allMonitors.filter(m => m.status === 'up').length;
-        const downCount = allMonitors.filter(m => m.status === 'down').length;
-        const totalUptime = allMonitors.reduce((acc, m) => acc + (m.uptime || 0), 0);
-        const avgUptime = total > 0 ? (totalUptime / total).toFixed(1) : '---';
+        const { total, upCount, downCount, avgUptime } = this.getStats();
         await this.broadcast({
           type: 'update',
           total,
@@ -215,7 +269,7 @@ export class MonitorEngine extends DurableObject {
           avgUptime,
           monitors: [cleanMonitor]
         });
-        
+
         return Response.json({ success: true, monitor: cleanMonitor }, { headers: corsHeaders });
       }
       return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
@@ -261,6 +315,100 @@ export class MonitorEngine extends DurableObject {
       return Response.json(allLogs, { headers: corsHeaders });
     }
 
+    // API: 获取配置信息 (仅限 Dashboard 使用)
+    if (url.pathname === "/api/config" && request.method === "GET") {
+      return Response.json({
+        probe_key: this.env.PROBE_KEY || this.env.SECURE_KEY || ""
+      }, { headers: corsHeaders });
+    }
+
+    // API: 处理系统探针数据
+    if (url.pathname === "/api/system-stats" && request.method === "POST") {
+      const body = await request.json() as any;
+      const { id, name, data, key } = body;
+      
+      // 1. 基础验证与恶意篡改防护
+      if (!id) {
+        return new Response("Monitor ID is required", { status: 400 });
+      }
+      if (!data || typeof data !== 'object') {
+        return new Response("Invalid data", { status: 400 });
+      }
+
+      // 验证数据字段类型并确保数值合理
+      const sanitizedData = {
+        cpu: Math.min(100, Math.max(0, Number(data.cpu) || 0)),
+        load: Array.isArray(data.load) ? data.load.map((l: any) => Number(l) || 0) : [0,0,0],
+        mem: {
+          total: Math.max(0, Number(data.mem?.total) || 0),
+          used: Math.max(0, Number(data.mem?.used) || 0)
+        },
+        disk: {
+          total: Math.max(0, Number(data.disk?.total) || 0),
+          used: Math.max(0, Number(data.disk?.used) || 0)
+        },
+        net: {
+          up: Math.max(0, Number(data.net?.up) || 0),
+          down: Math.max(0, Number(data.net?.down) || 0),
+          total_up: Math.max(0, Number(data.net?.total_up) || 0),
+          total_down: Math.max(0, Number(data.net?.total_down) || 0)
+        },
+        uptime: Math.max(0, Number(data.uptime) || 0),
+        timestamp: Date.now()
+      };
+
+      // 2. 检查监控项是否存在且类型匹配
+      const monitor = this.monitors.get(id);
+      if (!monitor) {
+        return new Response("Monitor not found. Please add it in the dashboard first.", { status: 404 });
+      }
+      if (monitor.type !== 'server') {
+        return new Response("Monitor type mismatch. This ID belongs to a non-server monitor.", { status: 403 });
+      }
+
+      // 2.1 验证密钥 (严格校验，不回退)
+      const expectedKey = monitor.probe_key;
+      if (!expectedKey || key !== expectedKey) {
+        return new Response("Invalid probe key", { status: 401 });
+      }
+
+      // 3. 更新数据
+      monitor.status = 'up';
+      monitor.last_check = new Date().toISOString();
+      monitor.server_data = sanitizedData;
+      
+      // 更新可用率统计
+      this.updateMonitorUptime(id, true);
+      
+      // 3.1 显式更新内存中的 Map (确保引用一致性)
+      this.monitors.set(id, monitor);
+      
+      // 4. 持久化到数据库
+      //  await this.saveToSqlite();
+      
+      // 5. 确保闹钟已开启（用于超时检查）
+      const alarmTime = await this.state.storage.getAlarm();
+      console.log('alarmTime:', alarmTime);
+      if (!alarmTime || alarmTime < Date.now()) {
+        await this.state.storage.setAlarm(Date.now() + 30000);
+        console.log('Alarm set to:', Date.now() + 30000);
+      }
+      
+      // 广播更新
+      const { history24h, ...cleanMonitor } = monitor;
+      const { total, upCount, downCount, avgUptime } = this.getStats();
+      await this.broadcast({
+        type: 'update',
+        total,
+        upCount,
+        downCount,
+        avgUptime,
+        monitors: [cleanMonitor]
+      });
+
+      return new Response("ok");
+    }
+
     // API: 获取单个监控项日志
     if (url.pathname.startsWith("/api/logs/") && request.method === "GET") {
       const id = url.pathname.split("/").pop();
@@ -277,9 +425,49 @@ export class MonitorEngine extends DurableObject {
       return new Response("OK");
     }
 
+    // API: 内部验证接口 (用于 WebSocket 握手前置校验)
+    if (url.pathname === "/internal/verify-probe") {
+      const id = url.searchParams.get("id");
+      const key = url.searchParams.get("key");
+      const ip = url.searchParams.get("ip") || "unknown";
+
+      // 1. 频率限制 (防爆破)
+      const now = Date.now();
+      if (!this.rateLimits) this.rateLimits = new Map();
+      const rl = this.rateLimits.get(ip) || { count: 0, last: 0, blockedUntil: 0 };
+      
+      if (rl.blockedUntil > now) return new Response("Too Many Requests", { status: 429 });
+      
+      if (now - rl.last > 60000) {
+        rl.count = 1;
+      } else {
+        rl.count++;
+      }
+      rl.last = now;
+
+      if (rl.count > 15) { // 1分钟内尝试超过15次则封禁
+        rl.blockedUntil = now + 300000; // 封禁5分钟
+        this.rateLimits.set(ip, rl);
+        return new Response("Rate limit exceeded", { status: 429 });
+      }
+      this.rateLimits.set(ip, rl);
+
+      // 2. 密钥校验
+      if (!id || !key) return new Response("Missing parameters", { status: 400 });
+      const monitor = this.monitors.get(id);
+      if (!monitor || monitor.type !== 'server') return new Response("Monitor not found", { status: 404 });
+      
+      if (monitor.probe_key !== key) {
+        return new Response("Invalid key", { status: 401 });
+      }
+
+      return new Response("ok");
+    }
 
     return new Response("Not Found", { status: 404 });
   }
+
+  private rateLimits: Map<string, any> = new Map();
 
   /**
    * ====================== 优化后的 Alarm 处理队列 ======================
@@ -294,78 +482,115 @@ export class MonitorEngine extends DurableObject {
       console.log('数据库已初始化 ');
     }
     const now = Date.now();
+    const allMonitors = Array.from(this.monitors.values());
 
-    // 1. 仅选择到期的任务，且每次限制 5 个并发，防止超时
-    const dueMonitors = Array.from(this.monitors.values()).filter(m => new Date(m.next_check).getTime() <= now).slice(0, 5);
+    // 1. 检查服务器探针是否超时 (保留逻辑)
+    const serverMonitors = allMonitors.filter(m => m.type === 'server');
+    let hasServerStatusChange = false;
+    const changedServerMonitors = [];
 
-    if (dueMonitors.length > 0) {
-      console.log(`[MonitorEngine] 正在处理 ${dueMonitors.length} 个到期任务...`);
-
-      // 2. 并发执行
-      // 2. 并发执行（带间隔）
-      await Promise.allSettled(dueMonitors.map(async (m: any, index: number) => {
-        // 添加间隔，防止 429 错误
-        if (index > 0) {
-          await new Promise(resolve => setTimeout(resolve, 1200)); // 1.2秒间隔
+    for (const m of serverMonitors) {
+      if (!m.last_check) {
+        // console.log(`[MonitorEngine] Server probe ${m.name} has no last_check yet.`);
+        continue;
+      }
+      const lastCheck = new Date(m.last_check).getTime();
+      const diff = now - lastCheck;
+      
+      // 如果超过 150 秒没收到数据，标记为离线
+      if (diff > 150000 && m.status !== 'down') {
+        console.log(`[MonitorEngine] Server probe ${m.name} timed out. Diff: ${diff}ms, Status: ${m.status}, Notify: ${m.notify}`);
+        m.status = 'down';
+        // 记录失败
+        this.updateMonitorUptime(m.id, false);
+        hasServerStatusChange = true;
+        const { history24h, ...cleanMonitor } = m;
+        changedServerMonitors.push(cleanMonitor);
+        
+        if (m.notify) {
+          console.log(`[MonitorEngine] Sending TG notification for ${m.name} timeout.`);
+          // 使用 waitUntil 确保通知发送完成，即使 alarm 方法已返回
+          this.state.waitUntil(this.sendNotification(m, "down", 0, "Probe Timeout (150s)").catch(e => {
+            console.error(`[MonitorEngine] TG notification failed for ${m.name}:`, e);
+          }));
+        } else {
+          console.log(`[MonitorEngine] Notification disabled for ${m.name}, skipping TG.`);
         }
-        return this.checkSite(m);
-      }));
+      }
+    }
+
+    // 2. 仅选择到期的任务，且每次限制 5 个并发，防止超时
+    const dueMonitors = allMonitors
+      .filter(m => m.type !== 'server' && new Date(m.next_check || 0).getTime() <= now)
+      .slice(0, 5);
+
+    if (dueMonitors.length > 0 || hasServerStatusChange) {
+      if (dueMonitors.length > 0) {
+        console.log(`[MonitorEngine] 正在处理 ${dueMonitors.length} 个到期任务...`);
+
+        // 并发执行（带间隔）
+        await Promise.allSettled(dueMonitors.map(async (m: any, index: number) => {
+          // 添加间隔，防止 429 错误
+          if (index > 0) {
+            await new Promise(resolve => setTimeout(resolve, 1200)); // 1.2秒间隔
+          }
+          return this.checkSite(m);
+        }));
+      }
 
       // 3. 计算统计数据并推送当前批次结果
-      const allMonitors = Array.from(this.monitors.values());
-      const total = allMonitors.length;
-      const upCount = allMonitors.filter(m => m.status === 'up').length;
-      const downCount = allMonitors.filter(m => m.status === 'down').length;
-      const totalUptime = allMonitors.reduce((acc, m) => acc + (m.uptime || 0), 0);
-      const avgUptime = total > 0 ? (totalUptime / total).toFixed(1) : '---';
-      this.broadcast({
-        type: 'update',
-        total,
-        upCount,
-        downCount,
-        avgUptime,
-        monitors: dueMonitors.map(monitor => {
-          const { history24h, ...cleanMonitor } = monitor;
-          return cleanMonitor;
-        })
+      const stats = this.getStats();
+      
+      // 合并需要更新的监控项
+      const monitorsToUpdate = [
+        ...dueMonitors.map(m => {
+          const { history24h, ...clean } = m;
+          return clean;
+        }),
+        ...changedServerMonitors
+      ];
+
+      this.broadcast({ 
+        type: 'update', 
+        monitors: monitorsToUpdate,
+        ...stats
       });
+
       // 4. 链式调用：检查是否还有剩余到期任务
-      const remaining = allMonitors.filter(m => new Date(m.next_check).getTime() <= now).length;
+      const remaining = Array.from(this.monitors.values())
+        .filter(m => m.type !== 'server' && new Date(m.next_check || 0).getTime() <= now).length;
 
       if (remaining > 0) {
         console.log(`[MonitorEngine] 还有 ${remaining} 个任务等待处理，1秒后继续...`);
         await this.state.storage.setAlarm(Date.now() + 1000);
         return;
       }
-
+      
       // 5. 没有监控任务了，保存到 SQLite
       await this.saveToSqlite();
     }
 
-    // 4. 如果没有到期任务，寻找最近的一个任务时间并设定闹钟
+    // 6. 如果没有到期任务，寻找最近的一个任务时间并设定闹钟
     const nextTask = Array.from(this.monitors.values())
-      .filter(m => new Date(m.next_check).getTime() > now)
+      .filter(m => m.type !== 'server' && new Date(m.next_check || 0).getTime() > now)
       .sort((a, b) => new Date(a.next_check).getTime() - new Date(b.next_check).getTime())[0];
-
-    // 此处不需要再次 saveToSqlite，因为在 remaining 检查或处理完 dueMonitors 后已经保存过
-    // 也不需要在此处 broadcast，因为如果 dueMonitors.length > 0 已经在上面推送过了
-    // 如果由于某种原因需要全量更新，可以在这里保留全量推送，但用户要求局部更新。
 
     if (nextTask) {
       const nextTime = new Date(nextTask.next_check).getTime();
       const delay = Math.min(60000, Math.max(10000, nextTime - now)); // 最长60秒
-      const nextTimeStr = new Date(Date.now() + delay).toLocaleString();
+      const nextTimeStr = new Date(now + delay).toLocaleString();
       console.log(`[MonitorEngine] 无即时任务，下次任务在 ${nextTimeStr}`);
-      await this.state.storage.setAlarm(Date.now() + delay);
+      await this.state.storage.setAlarm(now + delay);
     } else {
       // 彻底没任务，30秒后醒来检查一次（保活）
-      const nextTimeStr = new Date(Date.now() + 30000).toLocaleString();
+      const nextTimeStr = new Date(now + 30000).toLocaleString();
       console.log(`[MonitorEngine] 无任务，30秒后检查（保活） ${nextTimeStr}`);
-      await this.state.storage.setAlarm(Date.now() + 30000);
-    }
+      await this.state.storage.setAlarm(now + 30000);
+    } 
   }
 
   async checkSite(monitor: any) {
+    if (monitor.type === 'server') return; // 探针监控不参与 fetch 轮询
     if (monitor.type === 'tcp') {
       return this.checkTcp(monitor);
     }
@@ -373,7 +598,7 @@ export class MonitorEngine extends DurableObject {
     let success = false;
     const start = Date.now();
     let statusCode = 0;
-    let errorMessage = "";   
+    let errorMessage = "";
     // 【新增】1. 在检查前记录旧状态
     const oldStatus = monitor.status;
 
@@ -574,35 +799,8 @@ export class MonitorEngine extends DurableObject {
         monitorData.logs.shift();
       }
 
-      const now = Date.now();
-      const isSuccess = success ? 1 : 0;
-      // 2. 后端24小时统计：仅保留必要数据（前端不会看到）
-      if (!monitorData.history24h) {
-        monitorData.history24h = [];
-      }
-
-      monitorData.history24h.push({
-        success: isSuccess,
-        timestamp: now
-      });
-
-      // 清理超过24小时的记录
-      const twentyFourHoursAgo = now - 24 * 60 * 60 * 1000;
-      monitorData.history24h = monitorData.history24h.filter(
-        (log: any) => log.timestamp > twentyFourHoursAgo
-      );
-
-      // 计算精确的24小时成功率
-      const total24h = monitorData.history24h.length;
-      const success24h = monitorData.history24h.filter((log: any) => log.success === 1).length;
-
-      monitorData.uptime24h = total24h > 0
-        ? Math.round((success24h / total24h) * 100)
-        : 100;
-
-      monitorData.uptime = monitorData.uptime24h;   // 兼容前端显示
-
-      this.monitors.set(monitor.id, monitorData);
+      // 更新可用率统计
+      this.updateMonitorUptime(monitor.id, success);
       //this.broadcast({ type: 'update', monitor: monitorData });
     }
 
@@ -610,9 +808,9 @@ export class MonitorEngine extends DurableObject {
     // 8. 状态变更通知
     // ============================
     if (oldStatus !== "unknown" && oldStatus !== newStatus && monitor.notify) {
-      this.sendNotification(monitor, newStatus, statusCode, errorMessage).catch(e => {
-        //console.error("[MonitorEngine] 通知发送失败:", e);
-      });
+      this.state.waitUntil(this.sendNotification(monitor, newStatus, statusCode, errorMessage).catch(e => {
+        console.error("[MonitorEngine] 通知发送失败:", e);
+      }));
     }
   }
 
@@ -688,33 +886,8 @@ export class MonitorEngine extends DurableObject {
         monitorData.logs.shift();
       }
 
-      const now = Date.now();
-      const isSuccess = success ? 1 : 0;
-      // 2. 后端24小时统计：仅保留必要数据（前端不会看到）
-      if (!monitorData.history24h) {
-        monitorData.history24h = [];
-      }
-
-      monitorData.history24h.push({
-        success: isSuccess,
-        timestamp: now
-      });
-
-      // 清理超过24小时的记录
-      const twentyFourHoursAgo = now - 24 * 60 * 60 * 1000;
-      monitorData.history24h = monitorData.history24h.filter(
-        (log: any) => log.timestamp > twentyFourHoursAgo
-      );
-
-      // 计算精确的24小时成功率
-      const total24h = monitorData.history24h.length;
-      const success24h = monitorData.history24h.filter((log: any) => log.success === 1).length;
-
-      monitorData.uptime24h = total24h > 0
-        ? Math.round((success24h / total24h) * 100)
-        : 100;
-
-      monitorData.uptime = monitorData.uptime24h;   // 兼容前端显示
+      // 更新可用率统计
+      this.updateMonitorUptime(monitor.id, success);
       this.monitors.set(monitor.id, monitorData);
       //this.broadcast({ type: 'update', monitor: monitorData });
     }
@@ -723,9 +896,9 @@ export class MonitorEngine extends DurableObject {
     // 状态变更通知
     // ============================
     if (oldStatus !== "unknown" && oldStatus !== newStatus && monitor.notify) {
-      this.sendNotification(monitor, newStatus, success ? 200 : 0, errorMessage).catch(e => {
-        //console.error("[MonitorEngine] 通知发送失败:", e);
-      });
+      this.state.waitUntil(this.sendNotification(monitor, newStatus, success ? 200 : 0, errorMessage).catch(e => {
+        console.error("[MonitorEngine] 通知发送失败:", e);
+      }));
     }
   }
 
@@ -735,7 +908,10 @@ export class MonitorEngine extends DurableObject {
     const token = this.env.TG_BOT_TOKEN;
     const chatId = this.env.TG_CHAT_ID;
 
-    if (!token || !chatId) return;
+    if (!token || !chatId) {
+      console.warn("[MonitorEngine] TG_BOT_TOKEN or TG_CHAT_ID is missing. Skipping notification.");
+      return;
+    }
 
     const icon = status === "up" ? "✅" : "❌";
     const statusText = status === "up" ? "恢复正常 (UP)" : "检测到故障 (DOWN)";
@@ -750,13 +926,14 @@ export class MonitorEngine extends DurableObject {
 
     const message = `${icon} *监控状态变更通知*\n\n` +
       `*名称*: ${monitor.name}\n` +
-      `*地址*: ${monitor.url}\n` +
+      `*地址*: ${monitor.url || 'Server Probe'}\n` +
       `*状态*: ${statusText}\n` +
       `*详情*: ${status === "up" ? "服务已恢复" : error}\n` +
       `*时间*: ${time}`;
 
+    console.log(`[MonitorEngine] Attempting to send TG message to ${chatId}`);
     try {
-      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      const resp = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -765,8 +942,16 @@ export class MonitorEngine extends DurableObject {
           parse_mode: "Markdown"
         })
       });
+      
+      if (!resp.ok) {
+        const errorText = await resp.text();
+        console.error(`[MonitorEngine] TG API returned error: ${resp.status} ${errorText}`);
+      } else {
+        console.log(`[MonitorEngine] TG notification sent successfully for ${monitor.name}`);
+      }
     } catch (e) {
-      //console.error("[MonitorEngine] 发送 TG 通知失败:", e);
+      console.error("[MonitorEngine] 发送 TG 通知失败:", e);
+      throw e; // Re-throw to be caught by the caller's catch block
     }
   }
 
