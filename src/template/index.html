@@ -711,6 +711,12 @@
         </div>
     </div>
 
+    <button id="backToTop" onclick="window.scrollTo({top: 0, behavior: 'smooth'})" title="Back to Top">
+        <svg width="24" height="24" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 10l7-7m0 0l7 7m-7-7v18" />
+        </svg>
+    </button>
+
     <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script>
         const i18n = {
@@ -1060,9 +1066,9 @@
                         data.monitors.forEach(m => {
                             if (m.logs) this.logs[m.id] = m.logs;
                         });
-                        this.avgUptime = data.avgUptime || '100';
-                        this.upCount = data.upCount || 0;
-                        this.downCount = data.downCount || 0;
+                        this.avgUptime = data.avgUptime !== undefined ? data.avgUptime : '100';
+                        this.upCount = data.upCount !== undefined ? data.upCount : 0;
+                        this.downCount = data.downCount !== undefined ? data.downCount : 0;
 
                         currentPage++;
                     }
@@ -1162,7 +1168,7 @@
                             // 💡 新增模式：插入到数组开头并局部插入 DOM
                             const updatedMonitor = data.monitor;
                             this.monitors.unshift(updatedMonitor);
-                            this.avgUptime = data.avgUptime || this.avgUptime;
+                            this.avgUptime = data.avgUptime !== undefined ? data.avgUptime : this.avgUptime;
                             this.upCount = data.upCount !== undefined ? data.upCount : this.upCount;
                             this.downCount = data.downCount !== undefined ? data.downCount : this.downCount;
                             this.total++;
@@ -1191,7 +1197,7 @@
 
                         } else if (data.type === 'update') {
                             const updatedMonitors = data.monitors;
-                            this.avgUptime = data.avgUptime || this.avgUptime;
+                            this.avgUptime = data.avgUptime !== undefined ? data.avgUptime : this.avgUptime;
                             this.upCount = data.upCount !== undefined ? data.upCount : this.upCount;
                             this.downCount = data.downCount !== undefined ? data.downCount : this.downCount;
 
@@ -1245,7 +1251,7 @@
                             const id = data.id;  // ✅ 从 data.id 中获取
                             console.log(`[WS] Deleting monitor with id: ${id}`);
                             this.monitors = this.monitors.filter(m => m.id !== id);
-                            this.avgUptime = data.avgUptime || this.avgUptime;
+                            this.avgUptime = data.avgUptime !== undefined ? data.avgUptime : this.avgUptime;
                             this.upCount = data.upCount !== undefined ? data.upCount : this.upCount;
                             this.downCount = data.downCount !== undefined ? data.downCount : this.downCount;
 
@@ -2105,6 +2111,7 @@
                 // 9. 回到顶部按钮监听
                 window.addEventListener('scroll', () => {
                     const btn = document.getElementById('backToTop');
+                    if (!btn) return;
                     if (window.scrollY > 300) {
                         btn.style.display = 'flex';
                     } else {
