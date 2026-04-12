@@ -490,17 +490,32 @@ export class MonitorEngine extends DurableObject {
     const changedServerMonitors = [];
 
     for (const m of serverMonitors) {
-      if (!m.last_check) continue;
+      if (!m.last_check) {
+        // console.log(`[MonitorEngine] Server probe ${m.name} has no last_check yet.`);
+        continue;
+      }
       const lastCheck = new Date(m.last_check).getTime();
+      const diff = now - lastCheck;
+      
       // 如果超过 150 秒没收到数据，标记为离线
-      if (now - lastCheck > 150000 && m.status !== 'down') {
+      if (diff > 150000 && m.status !== 'down') {
+        console.log(`[MonitorEngine] Server probe ${m.name} timed out. Diff: ${diff}ms, Status: ${m.status}, Notify: ${m.notify}`);
         m.status = 'down';
         // 记录失败
         this.updateMonitorUptime(m.id, false);
         hasServerStatusChange = true;
         const { history24h, ...cleanMonitor } = m;
         changedServerMonitors.push(cleanMonitor);
-        this.sendNotification(m, "down", 0, "Probe Timeout (150s)").catch(() => {});
+        
+        if (m.notify) {
+          console.log(`[MonitorEngine] Sending TG notification for ${m.name} timeout.`);
+          // 使用 waitUntil 确保通知发送完成，即使 alarm 方法已返回
+          this.state.waitUntil(this.sendNotification(m, "down", 0, "Probe Timeout (150s)").catch(e => {
+            console.error(`[MonitorEngine] TG notification failed for ${m.name}:`, e);
+          }));
+        } else {
+          console.log(`[MonitorEngine] Notification disabled for ${m.name}, skipping TG.`);
+        }
       }
     }
 
@@ -793,9 +808,9 @@ export class MonitorEngine extends DurableObject {
     // 8. 状态变更通知
     // ============================
     if (oldStatus !== "unknown" && oldStatus !== newStatus && monitor.notify) {
-      this.sendNotification(monitor, newStatus, statusCode, errorMessage).catch(e => {
-        //console.error("[MonitorEngine] 通知发送失败:", e);
-      });
+      this.state.waitUntil(this.sendNotification(monitor, newStatus, statusCode, errorMessage).catch(e => {
+        console.error("[MonitorEngine] 通知发送失败:", e);
+      }));
     }
   }
 
@@ -881,9 +896,9 @@ export class MonitorEngine extends DurableObject {
     // 状态变更通知
     // ============================
     if (oldStatus !== "unknown" && oldStatus !== newStatus && monitor.notify) {
-      this.sendNotification(monitor, newStatus, success ? 200 : 0, errorMessage).catch(e => {
-        //console.error("[MonitorEngine] 通知发送失败:", e);
-      });
+      this.state.waitUntil(this.sendNotification(monitor, newStatus, success ? 200 : 0, errorMessage).catch(e => {
+        console.error("[MonitorEngine] 通知发送失败:", e);
+      }));
     }
   }
 
@@ -893,7 +908,10 @@ export class MonitorEngine extends DurableObject {
     const token = this.env.TG_BOT_TOKEN;
     const chatId = this.env.TG_CHAT_ID;
 
-    if (!token || !chatId) return;
+    if (!token || !chatId) {
+      console.warn("[MonitorEngine] TG_BOT_TOKEN or TG_CHAT_ID is missing. Skipping notification.");
+      return;
+    }
 
     const icon = status === "up" ? "✅" : "❌";
     const statusText = status === "up" ? "恢复正常 (UP)" : "检测到故障 (DOWN)";
@@ -908,13 +926,14 @@ export class MonitorEngine extends DurableObject {
 
     const message = `${icon} *监控状态变更通知*\n\n` +
       `*名称*: ${monitor.name}\n` +
-      `*地址*: ${monitor.url}\n` +
+      `*地址*: ${monitor.url || 'Server Probe'}\n` +
       `*状态*: ${statusText}\n` +
       `*详情*: ${status === "up" ? "服务已恢复" : error}\n` +
       `*时间*: ${time}`;
 
+    console.log(`[MonitorEngine] Attempting to send TG message to ${chatId}`);
     try {
-      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      const resp = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
@@ -923,8 +942,16 @@ export class MonitorEngine extends DurableObject {
           parse_mode: "Markdown"
         })
       });
+      
+      if (!resp.ok) {
+        const errorText = await resp.text();
+        console.error(`[MonitorEngine] TG API returned error: ${resp.status} ${errorText}`);
+      } else {
+        console.log(`[MonitorEngine] TG notification sent successfully for ${monitor.name}`);
+      }
     } catch (e) {
-      //console.error("[MonitorEngine] 发送 TG 通知失败:", e);
+      console.error("[MonitorEngine] 发送 TG 通知失败:", e);
+      throw e; // Re-throw to be caught by the caller's catch block
     }
   }
 
