@@ -180,12 +180,12 @@ export class MonitorEngine extends DurableObject {
     if (url.pathname.startsWith("/api/monitors/") && request.method === "PUT") {
       const id = url.pathname.split("/").pop();
       if (id && this.monitors.has(id)) {
-        const body = await request.json() as any;   
+        const body = await request.json() as any;
         // 确保 headers 是 JSON 字符串
         if (body.headers && typeof body.headers === 'object') {
-        body.headers = JSON.stringify(body.headers);
+          body.headers = JSON.stringify(body.headers);
         }
-         // 1. 规范化 notify 字段
+        // 1. 规范化 notify 字段
         if (body.notify !== undefined) {
           body.notify = body.notify ? 1 : 0;
         }
@@ -215,7 +215,7 @@ export class MonitorEngine extends DurableObject {
           avgUptime,
           monitors: [cleanMonitor]
         });
-        
+
         return Response.json({ success: true, monitor: cleanMonitor }, { headers: corsHeaders });
       }
       return Response.json({ error: "Not found" }, { status: 404, headers: corsHeaders });
@@ -373,7 +373,7 @@ export class MonitorEngine extends DurableObject {
     let success = false;
     const start = Date.now();
     let statusCode = 0;
-    let errorMessage = "";   
+    let errorMessage = "";
     // 【新增】1. 在检查前记录旧状态
     const oldStatus = monitor.status;
 
@@ -609,8 +609,10 @@ export class MonitorEngine extends DurableObject {
     // ============================
     // 8. 状态变更通知
     // ============================
+    console.warn(`[Monitor] 状态变更通知:monitor.notify ${monitor.notify} ${monitor.name} ${oldStatus} -> ${newStatus}`);
     if (oldStatus !== "unknown" && oldStatus !== newStatus && monitor.notify) {
-         this.state.waitUntil(this.sendNotification(monitor, newStatus, success ? 200 : 0, errorMessage).catch(e => {
+      console.log(`[Monitor] 状态变更通知: ${monitor.name} ${oldStatus} -> ${newStatus}`);
+      this.state.waitUntil(this.sendNotification(monitor, newStatus, statusCode, errorMessage).catch(e => {
         console.error("[MonitorEngine] 通知发送失败:", e);
       }));
     }
@@ -730,45 +732,59 @@ export class MonitorEngine extends DurableObject {
   }
 
 
+async sendNotification(monitor: any, status: string, code: number, error: string) {
+  const token = this.env.TG_BOT_TOKEN;
+  const chatId = this.env.TG_CHAT_ID;
 
-  async sendNotification(monitor: any, status: string, code: number, error: string) {
-    const token = this.env.TG_BOT_TOKEN;
-    const chatId = this.env.TG_CHAT_ID;
-
-    if (!token || !chatId) return;
-
-    const icon = status === "up" ? "✅" : "❌";
-    const statusText = status === "up" ? "恢复正常 (UP)" : "检测到故障 (DOWN)";
-
-    // 安全的时间格式化
-    let time = "";
-    try {
-      time = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    } catch (e) {
-      time = new Date().toISOString().replace('T', ' ').split('.')[0] + ' UTC';
-    }
-
-    const message = `${icon} *监控状态变更通知*\n\n` +
-      `*名称*: ${monitor.name}\n` +
-      `*地址*: ${monitor.url}\n` +
-      `*状态*: ${statusText}\n` +
-      `*详情*: ${status === "up" ? "服务已恢复" : error}\n` +
-      `*时间*: ${time}`;
-
-    try {
-      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: message,
-          parse_mode: "Markdown"
-        })
-      });
-    } catch (e) {
-      //console.error("[MonitorEngine] 发送 TG 通知失败:", e);
-    }
+  if (!token || !chatId) {
+    console.error("[MonitorEngine] 通知失败: 环境变量 TG_BOT_TOKEN 或 TG_CHAT_ID 未配置");
+    return;
   }
+
+  const icon = status === "up" ? "✅" : "❌";
+  const statusText = status === "up" ? "恢复正常 (UP)" : "检测到故障 (DOWN)";
+  const time = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+
+  // 使用 HTML 模式比 Markdown 更不容易因为特殊字符（如 _ *）报错
+  const message = `
+<b>${icon} 监控状态变更通知</b>
+
+<b>名称</b>: ${monitor.name}
+<b>地址</b>: ${monitor.url}
+<b>状态</b>: ${statusText}
+<b>详情</b>: ${status === "up" ? "服务已恢复" : (error || "未知错误")}
+<b>时间</b>: ${time}
+  `.trim();
+
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), 15000); // 增加到15秒
+
+  try {
+    const resp = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: message,
+        parse_mode: "HTML" // 推荐使用 HTML 模式，更健壮
+      }),
+      signal: controller.signal
+    });
+
+    clearTimeout(id);
+
+    if (!resp.ok) {
+      const errorText = await resp.text();
+      console.error(`[MonitorEngine] TG API 报错: ${resp.status} - ${errorText}`);
+    } else {
+      console.log(`[MonitorEngine] 通知发送成功: ${monitor.name}`);
+    }
+  } catch (e: any) {
+    clearTimeout(id);
+    console.error(`[MonitorEngine] 发送异常 (网络/超时): ${e.message}`);
+  }
+}
+
 
   // ====================== KV 操作接口 (用于 Auth) ======================
   // ====================== KV 操作接口 (用于 Auth) ======================
