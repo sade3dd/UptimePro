@@ -904,57 +904,58 @@ export class MonitorEngine extends DurableObject {
 
 
 
-  async sendNotification(monitor: any, status: string, code: number, error: string) {
-    const token = this.env.TG_BOT_TOKEN;
-    const chatId = this.env.TG_CHAT_ID;
+async sendNotification(monitor: any, status: string, code: number, error: string) {
+  const token = this.env.TG_BOT_TOKEN;
+  const chatId = this.env.TG_CHAT_ID;
 
-    if (!token || !chatId) {
-      console.warn("[MonitorEngine] TG_BOT_TOKEN or TG_CHAT_ID is missing. Skipping notification.");
-      return;
-    }
-
-    const icon = status === "up" ? "✅" : "❌";
-    const statusText = status === "up" ? "恢复正常 (UP)" : "检测到故障 (DOWN)";
-
-    // 安全的时间格式化
-    let time = "";
-    try {
-      time = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    } catch (e) {
-      time = new Date().toISOString().replace('T', ' ').split('.')[0] + ' UTC';
-    }
-
-    const message = `${icon} *监控状态变更通知*\n\n` +
-      `*名称*: ${monitor.name}\n` +
-      `*地址*: ${monitor.url || 'Server Probe'}\n` +
-      `*状态*: ${statusText}\n` +
-      `*详情*: ${status === "up" ? "服务已恢复" : error}\n` +
-      `*时间*: ${time}`;
-
-    console.log(`[MonitorEngine] Attempting to send TG message to ${chatId}`);
-    try {
-      const resp = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: message,
-          parse_mode: "Markdown"
-        })
-      });
-      
-      if (!resp.ok) {
-        const errorText = await resp.text();
-        console.error(`[MonitorEngine] TG API returned error: ${resp.status} ${errorText}`);
-      } else {
-        console.log(`[MonitorEngine] TG notification sent successfully for ${monitor.name}`);
-      }
-    } catch (e) {
-      console.error("[MonitorEngine] 发送 TG 通知失败:", e);
-      throw e; // Re-throw to be caught by the caller's catch block
-    }
+  if (!token || !chatId) {
+    console.error("[MonitorEngine] 通知失败: 环境变量 TG_BOT_TOKEN 或 TG_CHAT_ID 未配置");
+    return;
   }
 
+  const icon = status === "up" ? "✅" : "❌";
+  const statusText = status === "up" ? "恢复正常 (UP)" : "检测到故障 (DOWN)";
+  const time = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+
+  // 使用 HTML 模式比 Markdown 更不容易因为特殊字符（如 _ *）报错
+  const message = `
+<b>${icon} 监控状态变更通知</b>
+
+<b>名称</b>: ${monitor.name}
+<b>地址</b>: ${monitor.url}
+<b>状态</b>: ${statusText}
+<b>详情</b>: ${status === "up" ? "服务已恢复" : (error || "未知错误")}
+<b>时间</b>: ${time}
+  `.trim();
+
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), 15000); // 增加到15秒
+
+  try {
+    const resp = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: message,
+        parse_mode: "HTML" // 推荐使用 HTML 模式，更健壮
+      }),
+      signal: controller.signal
+    });
+
+    clearTimeout(id);
+
+    if (!resp.ok) {
+      const errorText = await resp.text();
+      console.error(`[MonitorEngine] TG API 报错: ${resp.status} - ${errorText}`);
+    } else {
+      console.log(`[MonitorEngine] 通知发送成功: ${monitor.name}`);
+    }
+  } catch (e: any) {
+    clearTimeout(id);
+    console.error(`[MonitorEngine] 发送异常 (网络/超时): ${e.message}`);
+  }
+}
   // ====================== KV 操作接口 (用于 Auth) ======================
   // ====================== KV 操作接口 (用于 Auth) ======================
   async kvGet(key: string) {
