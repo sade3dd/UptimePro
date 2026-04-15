@@ -484,8 +484,11 @@ export class MonitorEngine extends DurableObject {
         let bodyData = monitor.body;
         const bodyType = monitor.body_type || 'none';
 
+        // 注意：sanitizeHeaders 已经将 key 转为小写，所以这里必须检查小写 'content-type'
         if (bodyType === 'json') {
-          if (!headers["Content-Type"]) headers["Content-Type"] = "application/json";
+          if (!headers["content-type"]) {
+            headers["content-type"] = "application/json";
+          }
           try {
             // 如果是对象则序列化，否则原样（可能是已经序列化的字符串）
             const parsed = typeof monitor.body === 'string' ? JSON.parse(monitor.body) : monitor.body;
@@ -494,7 +497,9 @@ export class MonitorEngine extends DurableObject {
             bodyData = monitor.body;
           }
         } else if (bodyType === 'form') {
-          if (!headers["Content-Type"]) headers["Content-Type"] = "application/x-www-form-urlencoded";
+          if (!headers["content-type"]) {
+            headers["content-type"] = "application/x-www-form-urlencoded";
+          }
           try {
             const parsed = typeof monitor.body === 'string' ? JSON.parse(monitor.body) : monitor.body;
             bodyData = new URLSearchParams(parsed).toString();
@@ -503,13 +508,14 @@ export class MonitorEngine extends DurableObject {
           }
         } else if (bodyType === 'raw') {
           // raw 模式下，如果不手动设置 Content-Type，默认 text/plain
-          if (!headers["Content-Type"]) headers["Content-Type"] = "text/plain";
+          if (!headers["content-type"]) {
+            headers["content-type"] = "text/plain";
+          }
           bodyData = monitor.body;
         }
 
         fetchOptions.body = bodyData;
       }
-
 
       // ============================
       // 6. 执行请求
