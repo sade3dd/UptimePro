@@ -451,8 +451,11 @@ export class MonitorEngine extends DurableObject {
         let bodyData = monitor.body;
         const bodyType = monitor.body_type || 'none';
 
+        // 注意：sanitizeHeaders 已经将 key 转为小写，所以这里必须检查小写 'content-type'
         if (bodyType === 'json') {
-          if (!headers["Content-Type"]) headers["Content-Type"] = "application/json";
+          if (!headers["content-type"]) {
+            headers["content-type"] = "application/json";
+          }
           try {
             // 如果是对象则序列化，否则原样（可能是已经序列化的字符串）
             const parsed = typeof monitor.body === 'string' ? JSON.parse(monitor.body) : monitor.body;
@@ -461,7 +464,9 @@ export class MonitorEngine extends DurableObject {
             bodyData = monitor.body;
           }
         } else if (bodyType === 'form') {
-          if (!headers["Content-Type"]) headers["Content-Type"] = "application/x-www-form-urlencoded";
+          if (!headers["content-type"]) {
+            headers["content-type"] = "application/x-www-form-urlencoded";
+          }
           try {
             const parsed = typeof monitor.body === 'string' ? JSON.parse(monitor.body) : monitor.body;
             bodyData = new URLSearchParams(parsed).toString();
@@ -470,7 +475,9 @@ export class MonitorEngine extends DurableObject {
           }
         } else if (bodyType === 'raw') {
           // raw 模式下，如果不手动设置 Content-Type，默认 text/plain
-          if (!headers["Content-Type"]) headers["Content-Type"] = "text/plain";
+          if (!headers["content-type"]) {
+            headers["content-type"] = "text/plain";
+          }
           bodyData = monitor.body;
         }
 
@@ -697,45 +704,58 @@ export class MonitorEngine extends DurableObject {
   }
 
 
+async sendNotification(monitor: any, status: string, code: number, error: string) {
+  const token = this.env.TG_BOT_TOKEN;
+  const chatId = this.env.TG_CHAT_ID;
 
-  async sendNotification(monitor: any, status: string, code: number, error: string) {
-    const token = this.env.TG_BOT_TOKEN;
-    const chatId = this.env.TG_CHAT_ID;
-
-    if (!token || !chatId) return;
-
-    const icon = status === "up" ? "✅" : "❌";
-    const statusText = status === "up" ? "恢复正常 (UP)" : "检测到故障 (DOWN)";
-
-    // 安全的时间格式化
-    let time = "";
-    try {
-      time = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
-    } catch (e) {
-      time = new Date().toISOString().replace('T', ' ').split('.')[0] + ' UTC';
-    }
-
-    const message = `${icon} *监控状态变更通知*\n\n` +
-      `*名称*: ${monitor.name}\n` +
-      `*地址*: ${monitor.url}\n` +
-      `*状态*: ${statusText}\n` +
-      `*详情*: ${status === "up" ? "服务已恢复" : error}\n` +
-      `*时间*: ${time}`;
-
-    try {
-      await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: message,
-          parse_mode: "Markdown"
-        })
-      });
-    } catch (e) {
-      console.error("[MonitorEngine] 发送 TG 通知失败:", e);
-    }
+  if (!token || !chatId) {
+    console.error("[MonitorEngine] 通知失败: 环境变量 TG_BOT_TOKEN 或 TG_CHAT_ID 未配置");
+    return;
   }
+
+  const icon = status === "up" ? "✅" : "❌";
+  const statusText = status === "up" ? "恢复正常 (UP)" : "检测到故障 (DOWN)";
+  const time = new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' });
+
+  // 使用 HTML 模式比 Markdown 更不容易因为特殊字符（如 _ *）报错
+  const message = `
+<b>${icon} 监控状态变更通知</b>
+
+<b>名称</b>: ${monitor.name}
+<b>地址</b>: ${monitor.url}
+<b>状态</b>: ${statusText}
+<b>详情</b>: ${status === "up" ? "服务已恢复" : (error || "未知错误")}
+<b>时间</b>: ${time}
+  `.trim();
+
+  const controller = new AbortController();
+  const id = setTimeout(() => controller.abort(), 15000); // 增加到15秒
+
+  try {
+    const resp = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: message,
+        parse_mode: "HTML" // 推荐使用 HTML 模式，更健壮
+      }),
+      signal: controller.signal
+    });
+
+    clearTimeout(id);
+
+    if (!resp.ok) {
+      const errorText = await resp.text();
+      console.error(`[MonitorEngine] TG API 报错: ${resp.status} - ${errorText}`);
+    } else {
+      console.log(`[MonitorEngine] 通知发送成功: ${monitor.name}`);
+    }
+  } catch (e: any) {
+    clearTimeout(id);
+    console.error(`[MonitorEngine] 发送异常 (网络/超时): ${e.message}`);
+  }
+}
 
   // ====================== KV 操作接口 (用于 Auth) ======================
   // ====================== KV 操作接口 (用于 Auth) ======================
